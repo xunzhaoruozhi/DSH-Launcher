@@ -2,6 +2,7 @@
   "name": "dsh-launcher",
   "private": true,
   "version": "0.7.2",
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "dev": "vite",

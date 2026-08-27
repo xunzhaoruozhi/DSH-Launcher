@@ -2,6 +2,9 @@
   <img src="assets/dsh-icon-source.png" alt="DSH Launcher 图标" width="180">
 </p>
 
+[![dsh.so risk](https://www.dsh.so/badge/dsh-launcher-6.svg)](https://www.dsh.so/artifact/dsh-launcher-6/)
+[![dsh.so install](https://www.dsh.so/badge/install/dsh-launcher-6.svg)](https://www.dsh.so/artifact/dsh-launcher-6/)
+
 # DSH Launcher
 
 一个基于 Tauri 2 的 DeepSeek Harness 桌面启动器。它负责启动和停止 `dsh web`，主窗口以浏览器式标签页承载 dsh WebUI；包管理、配置文件编辑、插件安装和新窗口入口都收纳在窄工具栏的弹窗里。
