@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { ask, open } from "@tauri-apps/plugin-dialog";
+import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 import whaleIconUrl from "../assets/dsh-icon-source.png";
 import {
   CircleAlert,
@@ -1323,6 +1324,23 @@ async function init(): Promise<void> {
   // 托盘菜单唤出的功能：打开对应面板 / 刷新页面（只在主窗口处理）。
   await listen<string>("open-dialog", (event) => { if (currentWindow.label === "control") showDialog(event.payload as DialogId); });
   await listen("refresh-web", () => { if (currentWindow.label === "control") refreshWeb(); });
+  // —— 桌面通知 ——
+  // dsh-launcher-notify 插件把回合/任务结束事件 POST 给 webserve 的
+  // /launcher/notify，后端原样转发到这里，由通知插件弹系统 toast。
+  // 启动器不在场时插件自己保持安静，所以这里收到即弹、无需再判断。
+  try {
+    let granted = await isPermissionGranted();
+    if (!granted) granted = (await requestPermission()) === "granted";
+    if (!granted) return;
+    await listen<string>("launcher-notify", (event) => {
+      try {
+        const payload = JSON.parse(event.payload) as { title?: string; body?: string };
+        if (payload.title) sendNotification({ title: payload.title, body: payload.body ?? "" });
+      } catch { /* 非 JSON 事件体，忽略 */ }
+    });
+  } catch (error) {
+    console.warn("桌面通知不可用：", error);
+  }
   const [loadedConfig, loadedStatus, version, initialTab] = await Promise.all([
     invoke<LauncherConfig>("load_config"),
     invoke<LauncherStatus>("get_status"),

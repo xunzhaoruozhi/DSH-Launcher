@@ -21,6 +21,7 @@
     "core:window:allow-set-focus",
     "dialog:allow-open",
     "dialog:allow-ask",
+    "notification:default",
     "allow-load-config",
     "allow-default-config",
     "allow-save-config",
