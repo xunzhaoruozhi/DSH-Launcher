@@ -54,6 +54,8 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 }
 .safe-mode-banner svg { width: 14px; height: 14px; stroke-width: 1.8; flex: none; }
 .safe-mode-banner[hidden] { display: none; }
+/* 横幅出现时工作区同步矮 30px，保证内容不被挤出屏幕。 */
+.safe-mode-active .workspace-view { height: calc(100% - 65px); }
 .safe-mode-banner button {
   margin-left: auto; display: inline-flex; align-items: center; gap: 6px;
   height: 22px; padding: 0 10px; border: 1px solid #2c2c31; border-radius: 5px;

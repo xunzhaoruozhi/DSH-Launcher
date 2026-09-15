@@ -136,9 +136,11 @@ fn attach_external(
     port: u16,
 ) -> Result<LauncherStatus, String> {
     // 外部启动的 dsh 不会把带令牌的那行输出交给我们。要不要请用户动手，取决于
-    // 两件事同时成立：服务端要认证，且这个 WebView 手里还没有它的 Cookie
+    // 两件事同时成立：服务端要认证，且这个 WebView 手里确实没有它的 Cookie
     // （之前认过的 Cookie 默认能用 30 天，那种情况直接进，不该弹提示）。
-    let auth_required = http_root_status(port) == Some(401) && !has_auth_cookie(&app, port);
+    // 查不了（None）时先不打扰：外部服务每 9 秒会复查一次。
+    let auth_required =
+        http_root_status(port) == Some(401) && has_auth_cookie(&app, port) == Some(false);
     {
         let mut runtime = state.runtime.lock().map_err(|_| "启动器状态锁已损坏")?;
         if runtime.generation != generation {
@@ -220,7 +222,12 @@ fn monitor_external(app: AppHandle, state: AppState, generation: u64, port: u16)
 /// 这个端口的认证 Cookie，有就当已认证，只有「服务端要认证 + WebView 没凭证」
 /// 才需要用户动手。
 fn refresh_auth_required(app: &AppHandle, state: &AppState, generation: u64, port: u16) {
-    let required = http_root_status(port) == Some(401) && !has_auth_cookie(app, port);
+    // Cookie 状态查不了时维持现状：monitor_external 每 9 秒会再来一次，
+    // 别在未知状态下翻动提示。
+    let Some(has_cookie) = has_auth_cookie(app, port) else {
+        return;
+    };
+    let required = http_root_status(port) == Some(401) && !has_cookie;
     let mut changed = false;
     if let Ok(mut runtime) = state.runtime.lock() {
         if runtime.generation != generation {
@@ -244,16 +251,18 @@ fn refresh_auth_required(app: &AppHandle, state: &AppState, generation: u64, por
 /// WebView 里是否已经有这个端口的 dsh 认证 Cookie。
 ///
 /// dsh 的 Cookie 名字是 `dsh-auth-<把 host:port 哈希过的串>`，名字里认不出端口，
-/// 所以按 URL 查（Cookie 本身是 host-only 且带端口绑定，查到即对应这个服务）。
-/// 读不到 WebView（窗口还没建好等）时按“没有凭证”处理，宁可多提示一次。
-fn has_auth_cookie(app: &AppHandle, port: u16) -> bool {
-    let Ok(url) = format!("http://localhost:{port}/").parse::<tauri::Url>() else {
-        return false;
+/// 所以按 URL 查。必须用 127.0.0.1 查：内嵌页面和带令牌的地址都是
+/// http://127.0.0.1:<port>/，Cookie 是 host-only 的，拿 localhost 去查永远
+/// 查不到，会把已认证的会话误判成“需要认证”。
+/// 返回 None 表示这一刻查不了（底层 panic 已被兜住），调用方应维持现状等复查。
+fn has_auth_cookie(app: &AppHandle, port: u16) -> Option<bool> {
+    let Ok(url) = format!("http://127.0.0.1:{port}/").parse::<tauri::Url>() else {
+        return Some(false);
     };
     // tauri-runtime-wry 的 cookies_for_url 在事件循环没应答时不是返回 Err 而是
     // 直接 panic（lib.rs 里的 rx.recv().unwrap()）。启动早期或窗口半死时查
-    // cookie 会踩中，把整个 start 任务一起带走——界面卡在“正在启动”就是它。
-    // catch_unwind 兜住：拿不到就当没有，宁可多提示一次认证。
+    // cookie 会踩中，把整个调用任务一起带走——界面卡在“正在启动”就是它。
+    // catch_unwind 兜住：查不了返回 None，等下一轮复查，别乱下结论。
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         app.webview_windows().values().any(|window| {
             window
@@ -266,7 +275,7 @@ fn has_auth_cookie(app: &AppHandle, port: u16) -> bool {
                 .unwrap_or(false)
         })
     }))
-    .unwrap_or(false)
+    .ok()
 }
 
 /// `safe_mode = true` 时用一次性隔离 DSH_HOME 启动：正式 ~/.dsh 原封不动，

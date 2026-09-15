@@ -749,7 +749,9 @@ function renderStatus(next: LauncherStatus): void {
   state.dataset.phase = next.phase;
   $("#workspace-title").textContent = maintenance ? (next.busy ?? "操作进行中") : next.phase === "failed" ? "dsh 启动失败" : next.phase === "starting" ? "正在启动 dsh" : "dsh 尚未运行";
   $("#workspace-message").textContent = maintenance ? "操作完成后会自动恢复服务，请稍候。" : next.message;
-  // 安全模式横幅与错误界面的安全模式入口。
+  // 安全模式横幅与错误界面的安全模式入口。body 上的类让工作区高度同步
+  // 扣掉横幅的 30px，否则内容被整体挤出屏幕、底部按钮被裁掉。
+  document.body.classList.toggle("safe-mode-active", next.safe_mode);
   $("#safe-mode-banner").hidden = !next.safe_mode;
   $<HTMLButtonElement>("#workspace-safe").hidden = !(next.phase === "failed" && next.consecutive_failures >= 2);
   // 顶栏按钮随状态切换「进入 / 退出」。
