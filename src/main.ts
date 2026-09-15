@@ -59,6 +59,11 @@ interface LauncherConfig {
   download_ask: boolean;
   download_choose_location: boolean;
   auto_check_updates: boolean;
+  notify_enabled: boolean;
+  notify_turn_completed: boolean;
+  notify_turn_failed: boolean;
+  notify_job_completed: boolean;
+  notify_job_failed: boolean;
   window_width: number;
   window_height: number;
 }
@@ -254,9 +259,16 @@ app.innerHTML = `
         <header class="modal-header"><div><p class="eyebrow">DSH LAUNCHER</p><h2 id="settings-title">设置</h2></div><button class="modal-close" data-close-modal title="关闭"><i data-lucide="x"></i></button></header>
         <div class="settings-content">
           <div class="settings-section"><p class="eyebrow">WINDOW</p><h3>关闭按钮行为</h3><div class="segmented wide"><label><input type="radio" name="close_behavior" value="tray"><span>最小化到托盘</span></label><label><input type="radio" name="close_behavior" value="exit"><span>退出 Launcher</span></label></div>
-            <div class="field full"><label for="setting-summon-shortcut">全局唤出快捷键</label><div class="input-with-hint"><input id="setting-summon-shortcut" autocomplete="off" spellcheck="false" placeholder="例如 Alt+Shift+D"><small class="field-hint">任意程序里按下即唤出/收起主窗口，留空则禁用</small></div></div><label class="check-row compact"><input id="setting-hide-shell" type="checkbox"><span><strong>隐藏顶部外壳</strong><small>窗口只显示 dsh 内容；插件、设置等全部从托盘菜单唤出</small></span></label></div>
+            <div class="field full"><label for="setting-summon-shortcut">全局唤出快捷键</label><div class="input-with-hint"><input id="setting-summon-shortcut" autocomplete="off" spellcheck="false" placeholder="例如 Alt+Shift+D"><small class="field-hint">任意程序里按下即唤出/收起主窗口，留空则禁用</small></div></div><!-- 无外壳模式已弃用（拖动手感不佳），选项下线；代码保留默认关闭。 --><label class="check-row compact" hidden><input id="setting-hide-shell" type="checkbox"><span><strong>隐藏顶部外壳</strong><small>窗口只显示 dsh 内容；插件、设置等全部从托盘菜单唤出</small></span></label></div>
           <label class="check-row"><input id="setting-auto-start" type="checkbox"><span><strong>启动后自动启动 dsh Web 服务</strong><small>Launcher 打开后立即启动本地服务</small></span></label>
           <label class="check-row"><input id="setting-stop-dsh" type="checkbox"><span><strong>退出 Launcher 时结束 dsh</strong><small>只结束由当前 Launcher 启动并登记的进程树</small></span></label>
+          <div class="settings-section"><p class="eyebrow">NOTIFY</p><h3>桌面通知</h3>
+            <label class="check-row"><input id="setting-notify-enabled" type="checkbox"><span><strong>启用桌面通知</strong><small>你发起的回合与后台任务结束时弹系统通知</small></span></label>
+            <label class="check-row compact"><input id="setting-notify-turn-completed" type="checkbox"><span><strong>回合完成时通知</strong><small>你发起的回合正常结束</small></span></label>
+            <label class="check-row compact"><input id="setting-notify-turn-failed" type="checkbox"><span><strong>回合失败时通知</strong><small>回合出错或达到长度上限</small></span></label>
+            <label class="check-row compact"><input id="setting-notify-job-completed" type="checkbox"><span><strong>后台任务完成时通知</strong><small>后台任务正常结束</small></span></label>
+            <label class="check-row compact"><input id="setting-notify-job-failed" type="checkbox"><span><strong>后台任务失败时通知</strong><small>后台任务出错</small></span></label>
+          </div>
           <div class="settings-section download-section"><p class="eyebrow">DOWNLOAD</p><h3>下载</h3>
             <div class="field full"><label for="setting-download-directory">默认下载目录</label><div class="path-input"><input id="setting-download-directory" autocomplete="off" spellcheck="false"><button id="browse-download-directory" type="button" class="icon-button" title="选择下载目录"><i data-lucide="folder-open"></i></button></div></div>
             <label class="check-row"><input id="setting-download-ask" type="checkbox"><span><strong>下载前确认</strong><small>每次下载前弹出确认提示</small></span></label>
@@ -381,6 +393,11 @@ function fillSettings(): void {
   $("#setting-download-ask").checked = config.download_ask;
   $("#setting-download-choose").checked = config.download_choose_location;
   $("#setting-auto-check-updates").checked = config.auto_check_updates;
+  $("#setting-notify-enabled").checked = config.notify_enabled;
+  $("#setting-notify-turn-completed").checked = config.notify_turn_completed;
+  $("#setting-notify-turn-failed").checked = config.notify_turn_failed;
+  $("#setting-notify-job-completed").checked = config.notify_job_completed;
+  $("#setting-notify-job-failed").checked = config.notify_job_failed;
   $("#launcher-version").textContent = launcherVersion;
   if (currentWindow.label === "control") $("#window-close").title = config.close_behavior === "tray" ? "关闭到托盘" : "退出 Launcher";
 }
@@ -395,6 +412,11 @@ function readSettings(): LauncherConfig {
     download_ask: $("#setting-download-ask").checked,
     download_choose_location: $("#setting-download-choose").checked,
     auto_check_updates: $("#setting-auto-check-updates").checked,
+    notify_enabled: $("#setting-notify-enabled").checked,
+    notify_turn_completed: $("#setting-notify-turn-completed").checked,
+    notify_turn_failed: $("#setting-notify-turn-failed").checked,
+    notify_job_completed: $("#setting-notify-job-completed").checked,
+    notify_job_failed: $("#setting-notify-job-failed").checked,
   };
 }
 async function saveSettings(): Promise<void> {
@@ -1334,7 +1356,13 @@ async function init(): Promise<void> {
     if (!granted) return;
     await listen<string>("launcher-notify", (event) => {
       try {
-        const payload = JSON.parse(event.payload) as { title?: string; body?: string };
+        const payload = JSON.parse(event.payload) as { kind?: string; title?: string; body?: string };
+        if (!config.notify_enabled) return;
+        const kind = payload.kind ?? "";
+        if (kind === "turn-completed" && !config.notify_turn_completed) return;
+        if (kind === "turn-failed" && !config.notify_turn_failed) return;
+        if (kind === "job-completed" && !config.notify_job_completed) return;
+        if (kind === "job-failed" && !config.notify_job_failed) return;
         if (payload.title) sendNotification({ title: payload.title, body: payload.body ?? "" });
       } catch { /* 非 JSON 事件体，忽略 */ }
     });
