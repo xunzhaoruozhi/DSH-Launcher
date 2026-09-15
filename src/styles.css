@@ -183,7 +183,7 @@ input, select, textarea { outline: none; }
 input:not([type="radio"]), select { width: 100%; height: 34px; padding: 0 9px; border: 1px solid var(--border-strong); border-radius: 4px; background: var(--surface); color: var(--text); font-size: 12px; }
 input:focus, select:focus, textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(36, 107, 253, .12); }
 .path-input { display: flex; align-items: center; gap: 7px; }
-.path-input input { flex: 1; min-width: 0; }
+.path-input input, .path-input select { flex: 1; min-width: 0; width: auto; }
 .segmented { display: inline-grid; grid-template-columns: 1fr 1fr; padding: 2px; border-radius: 5px; background: var(--surface-muted); }
 .segmented label { position: relative; }
 .segmented input { position: absolute; opacity: 0; pointer-events: none; }

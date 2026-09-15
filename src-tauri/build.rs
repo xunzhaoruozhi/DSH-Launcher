@@ -41,6 +41,8 @@ fn main() {
                 "move_tab_drag_preview",
                 "hide_tab_drag_preview",
                 "drop_tab",
+                "has_custom_notify_sound",
+                "set_custom_notify_sound",
             ]),
         ),
     )

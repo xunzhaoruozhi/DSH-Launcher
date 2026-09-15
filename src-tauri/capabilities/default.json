@@ -56,6 +56,8 @@
     "allow-show-tab-drag-preview",
     "allow-move-tab-drag-preview",
     "allow-hide-tab-drag-preview",
-    "allow-drop-tab"
+    "allow-drop-tab",
+    "allow-has-custom-notify-sound",
+    "allow-set-custom-notify-sound"
   ]
 }

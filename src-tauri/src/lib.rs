@@ -14,7 +14,6 @@
 mod config;
 mod download;
 mod dsh_files;
-#[cfg(target_os = "windows")]
 mod sounds;
 #[cfg(target_os = "windows")]
 mod theme_sync;
@@ -79,7 +78,9 @@ pub fn run() {
             windows_ui::show_tab_drag_preview,
             windows_ui::move_tab_drag_preview,
             windows_ui::hide_tab_drag_preview,
-            windows_ui::drop_tab
+            windows_ui::drop_tab,
+            sounds::has_custom_notify_sound,
+            sounds::set_custom_notify_sound
         ])
         .setup(|app| {
             #[cfg(target_os = "macos")]

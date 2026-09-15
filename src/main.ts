@@ -267,7 +267,7 @@ app.innerHTML = `
             <label class="check-row compact"><input id="setting-notify-turn-failed" type="checkbox"><span><strong>回合失败时通知</strong><small>回合出错或达到长度上限</small></span></label>
             <label class="check-row compact"><input id="setting-notify-job-completed" type="checkbox"><span><strong>后台任务完成时通知</strong><small>后台任务正常结束</small></span></label>
             <label class="check-row compact"><input id="setting-notify-job-failed" type="checkbox"><span><strong>后台任务失败时通知</strong><small>后台任务出错</small></span></label>
-            <div class="field full"><label for="setting-notify-sound">通知声音</label><select id="setting-notify-sound"><option value="">无声</option><optgroup label="系统音"><option value="Default">系统默认</option><option value="IM">即时消息</option><option value="Mail">邮件</option><option value="Reminder">提醒</option><option value="SMS">短信</option><option value="Alarm">闹钟</option><option value="Alarm2">闹钟 2</option><option value="Call">来电</option></optgroup><optgroup label="自定义"><option value="taskCompleted">任务完成</option><option value="taskFailed">任务失败</option><option value="success">成功</option><option value="error">错误</option><option value="warning">警告</option><option value="terminalBell">响铃</option></optgroup></select></div>
+            <div class="field full"><label for="setting-notify-sound">通知声音</label><div class="path-input"><select id="setting-notify-sound"><option value="">无声</option><optgroup label="系统音"><option value="Default">系统默认</option><option value="IM">即时消息</option><option value="Mail">邮件</option><option value="Reminder">提醒</option><option value="SMS">短信</option><option value="Alarm">闹钟</option><option value="Alarm2">闹钟 2</option><option value="Call">来电</option></optgroup><optgroup label="自定义"><option value="taskCompleted">任务完成</option><option value="taskFailed">任务失败</option><option value="success">成功</option><option value="error">错误</option><option value="warning">警告</option><option value="terminalBell">响铃</option><option value="custom">自选文件…</option></optgroup></select><button id="browse-notify-sound" type="button" class="icon-button" title="选择自定义声音文件（mp3 / wav）"><i data-lucide="file-audio"></i></button></div></div>
           </div>
           <div class="settings-section download-section"><p class="eyebrow">DOWNLOAD</p><h3>下载</h3>
             <div class="field full"><label for="setting-download-directory">默认下载目录</label><div class="path-input"><input id="setting-download-directory" autocomplete="off" spellcheck="false"><button id="browse-download-directory" type="button" class="icon-button" title="选择下载目录"><i data-lucide="folder-open"></i></button></div></div>
@@ -1296,6 +1296,16 @@ document.addEventListener("click", (event) => {
 });
 $("#browse-workspace").addEventListener("click", async () => { const selected = await open({ directory: true, multiple: false, defaultPath: $("#working-directory").value || undefined }); if (typeof selected === "string") $("#working-directory").value = selected; });
 $("#browse-download-directory").addEventListener("click", async () => { const selected = await open({ directory: true, multiple: false, defaultPath: $("#setting-download-directory").value || undefined }); if (typeof selected === "string") $("#setting-download-directory").value = selected; });
+  $("#browse-notify-sound").addEventListener("click", async () => {
+    const selected = await open({ multiple: false, filters: [{ name: "音频文件", extensions: ["mp3", "wav"] }] });
+    if (typeof selected !== "string") return;
+    try {
+      await invoke("set_custom_notify_sound", { path: selected });
+      $("#setting-notify-sound").value = "custom";
+      await saveSettings();
+      toast("自定义通知音已保存");
+    } catch (error) { toast(String(error), true); }
+  });
 $("#refresh-web").addEventListener("click", refreshWeb);
 $("#tab-add").addEventListener("click", () => addTab());
 // 标签多到放不下时用滚轮横向滚动标签条。
