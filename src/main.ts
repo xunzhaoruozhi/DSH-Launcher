@@ -262,8 +262,9 @@ app.innerHTML = `
             <label class="check-row compact"><input id="setting-download-choose" type="checkbox"><span><strong>下载前选择保存位置</strong><small>显示“另存为”对话框，可同时修改文件名</small></span></label>
           </div>
           <div class="settings-section about-section"><p class="eyebrow">ABOUT</p><h3>关于 DSH Launcher</h3><p class="about-copy">当前版本 <strong id="launcher-version">读取中</strong></p><div class="about-actions"><a class="button quiet" data-external href="https://github.com/xunzhaoruozhi/DSH-Launcher"><i data-lucide="github"></i><span>GitHub 仓库</span></a><a class="button primary" data-external href="https://github.com/xunzhaoruozhi/DSH-Launcher/releases"><i data-lucide="external-link"></i><span>前往 Release 下载更新</span></a></div></div>
-          <label class="check-row compact update-check-row"><input id="setting-auto-check-updates" type="checkbox"><span><strong>启动时自动检查更新</strong><small>每次打开 Launcher 时检查 GitHub Release，不会自动下载</small></span></label>
-          <div class="about-actions update-actions"><button id="check-launcher-update" class="button quiet"><i data-lucide="refresh-cw"></i><span>检查更新</span></button></div>
+          <!-- 更新检查暂时下线（手动推送发版；恢复时去掉两个 hidden 即可） -->
+          <label class="check-row compact update-check-row" hidden><input id="setting-auto-check-updates" type="checkbox"><span><strong>启动时自动检查更新</strong><small>每次打开 Launcher 时检查 GitHub Release，不会自动下载</small></span></label>
+          <div class="about-actions update-actions" hidden><button id="check-launcher-update" class="button quiet"><i data-lucide="refresh-cw"></i><span>检查更新</span></button></div>
         </div>
         <footer class="modal-footer"><span id="settings-save-result"></span><button id="save-settings" class="button primary"><i data-lucide="save"></i><span>保存设置</span></button></footer>
       </section>
@@ -1311,7 +1312,8 @@ async function init(): Promise<void> {
   applyShellMode();
   renderStatus(loadedStatus);
   await revealWindow();
-  if (currentWindow.label === "control" && config.auto_check_updates) void checkLauncherUpdate(false);
+  // 更新检查暂时下线：手动推送发版；恢复时取消下一行注释即可。
+  // if (currentWindow.label === "control" && config.auto_check_updates) void checkLauncherUpdate(false);
   // 有互斥操作在进行时不自动启动：操作方会在结束后自行恢复服务。
   if (config.auto_start && loadedStatus.phase === "stopped" && !loadedStatus.busy) await runAction("start_dsh");
 }
