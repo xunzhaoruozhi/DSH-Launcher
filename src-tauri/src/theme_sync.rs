@@ -4,7 +4,7 @@
 //! 任何主题都能无缝跟随。
 
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 use windows_sys::Win32::Foundation::RECT;
 use windows_sys::Win32::Graphics::Gdi::{
@@ -25,25 +25,37 @@ use windows_sys::Win32::UI::WindowsAndMessaging::GetWindowRect;
 const SAMPLE_Y: i32 = 45;
 /// 采样条高度：只要顶栏下方一小条，别整窗截图。
 const STRIP_HEIGHT: i32 = 60;
-const POLL_MS: u64 = 2000;
+/// 稳态采样间隔：颜色没在变的时候慢慢查，省 CPU。
+const POLL_MS: u64 = 600;
+/// 刚检测到颜色变化后的密集采样间隔：主题切换（含过渡动画）要跟得紧。
+const POLL_FAST_MS: u64 = 150;
+/// 密集采样持续多久后回落到稳态。
+const FAST_WINDOW: Duration = Duration::from_secs(3);
 /// 颜色变化小于该阈值不广播，避免抖动刷事件。
 const CHANGE_EPSILON: i32 = 12;
 
 pub fn start(app: AppHandle) {
     thread::spawn(move || {
         let mut last: Option<[i32; 3]> = None;
+        let mut fast_until: Option<Instant> = None;
         loop {
-            thread::sleep(Duration::from_millis(POLL_MS));
+            let fast = matches!(fast_until, Some(t) if Instant::now() < t);
+            thread::sleep(Duration::from_millis(if fast { POLL_FAST_MS } else { POLL_MS }));
             let Some(rgb) = sample_below_titlebar(&app) else {
                 continue;
             };
-            if let Some(prev) = last {
-                let dist = (prev[0] - rgb[0]).abs() + (prev[1] - rgb[1]).abs() + (prev[2] - rgb[2]).abs();
-                if dist < CHANGE_EPSILON {
-                    continue;
+            let changed = match last {
+                Some(prev) => {
+                    let dist = (prev[0] - rgb[0]).abs() + (prev[1] - rgb[1]).abs() + (prev[2] - rgb[2]).abs();
+                    dist >= CHANGE_EPSILON
                 }
+                None => true,
+            };
+            if !changed {
+                continue;
             }
             last = Some(rgb);
+            fast_until = Some(Instant::now() + FAST_WINDOW);
             let hex = format!("#{:02x}{:02x}{:02x}", rgb[0], rgb[1], rgb[2]);
             let _ = app.emit("dsh-theme", hex);
         }
