@@ -14,6 +14,8 @@ fn main() {
                 "start_dsh",
                 "stop_dsh",
                 "restart_dsh",
+                "start_safe_mode",
+                "exit_safe_mode",
                 "submit_auth_url",
                 "auth_url_consumed",
                 "clear_logs",

@@ -29,6 +29,8 @@
     "allow-start-dsh",
     "allow-stop-dsh",
     "allow-restart-dsh",
+    "allow-start-safe-mode",
+    "allow-exit-safe-mode",
     "allow-submit-auth-url",
     "allow-auth-url-consumed",
     "allow-clear-logs",
