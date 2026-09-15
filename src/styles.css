@@ -29,8 +29,47 @@ button { cursor: pointer; }
 button:disabled { cursor: not-allowed; opacity: .45; }
 
 .shell { width: 100%; height: 100%; overflow: hidden; }
-.titlebar { height: 35px; display: flex; align-items: center; padding-left: 3px; border-bottom: 1px solid var(--border); background: var(--surface); user-select: none; }
+/* 顶栏融入 dsh 页面配色：#151517 为实测 dsh Web 背景色，去掉分隔线后
+   与下方内容无缝衔接；按钮/标签的悬停、文字色通过局部变量覆盖自动转暗。 */
+.titlebar {
+  height: 35px; display: flex; align-items: center; padding-left: 3px;
+  background: #151517; user-select: none;
+  --surface: #151517;
+  --surface-hover: #26262b;
+  --border: #2c2c31;
+  --border-strong: #3a3a40;
+  --text: #e8e8ea;
+  --text-muted: #9a9aa2;
+}
+/* 无外壳模式：整个顶栏隐藏，窗口只显示 dsh 内容。
+   顶部留一条 8px 隐形拖拽条：拖动窗口、双击最大化/还原（Tauri 拖拽区自带双击行为）。 */
+.shell-hidden .titlebar { display: none; }
+.shell-drag-strip { display: none; position: fixed; top: 0; left: 0; right: 0; height: 8px; z-index: 60; }
+.shell-hidden .shell-drag-strip { display: block; }
 .toolbar-left, .window-controls { height: 100%; display: flex; align-items: stretch; flex: none; }
+/* 安全模式横幅：融入暗色顶栏的低调提示条，13px 辅助灰，不做大字。 */
+.safe-mode-banner {
+  display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 14px;
+  background: #1c1c1f; border-bottom: 1px solid #26262b; color: #9a9aa2; font-size: 13px;
+}
+.safe-mode-banner svg { width: 14px; height: 14px; stroke-width: 1.8; flex: none; }
+.safe-mode-banner[hidden] { display: none; }
+.safe-mode-banner button {
+  margin-left: auto; display: inline-flex; align-items: center; gap: 6px;
+  height: 22px; padding: 0 10px; border: 1px solid #2c2c31; border-radius: 5px;
+  background: transparent; color: #c9c9ce; font-size: 12px;
+}
+.safe-mode-banner button:hover { background: #26262b; color: #e8e8ea; }
+.safe-mode-banner button svg { width: 12px; height: 12px; }
+/* 错误界面的安全模式入口：次级按钮，弱于主启动按钮。 */
+#workspace-safe {
+  display: inline-flex; align-items: center; gap: 8px; margin-top: 14px;
+  height: 34px; padding: 0 16px; border: 1px solid var(--border-strong); border-radius: 7px;
+  background: var(--surface); color: var(--text); font-size: 13px;
+}
+#workspace-safe:hover { background: var(--surface-hover); }
+#workspace-safe[hidden] { display: none; }
+#workspace-safe svg { width: 15px; height: 15px; stroke-width: 1.8; color: var(--text-muted); }
 .tool-button, .window-controls button { width: 38px; height: 100%; display: grid; place-items: center; position: relative; border: 0; border-radius: 0; background: transparent; color: var(--text-muted); }
 .tool-button:hover, .window-controls button:hover { background: var(--surface-hover); color: var(--text); }
 .tool-button svg, .window-controls svg { width: 15px; height: 15px; stroke-width: 1.8; }
@@ -165,6 +204,8 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
 .settings-section h3 { margin: 3px 0 10px; font-size: 13px; font-weight: 650; }
 .download-section { padding-top: 17px; }
 .download-section .field { margin-top: 10px; }
+.input-with-hint { display: block; margin-top: 13px; }
+.field-hint { display: block; margin-top: 5px; color: var(--text-muted); font-size: 10.5px; line-height: 15px; }
 .segmented.wide { display: grid; width: 100%; grid-template-columns: 1fr 1fr; }
 .check-row { display: flex; align-items: flex-start; gap: 9px; padding: 14px 0; border-bottom: 1px solid var(--border); cursor: pointer; }
 .check-row input { width: 15px; height: 15px; margin: 1px 0 0; accent-color: var(--accent); }
@@ -277,3 +318,35 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
   .modal:not([hidden]) .modal-panel,
   .modal:not([hidden]) .modal-backdrop { animation: none !important; }
 }
+
+/* —— 浏览器认证提示 ——
+   dsh 自 0.1.2 起要求先用启动时打印的带令牌地址换一次 cookie：Launcher 自己
+   拉起的 dsh 能自动认到那行地址，外部接管的只能请用户粘贴一次。它是一条可以
+   忽略的信息条，不遮挡 WebUI。 */
+.auth-prompt {
+  position: absolute;
+  left: 50%;
+  bottom: 18px;
+  z-index: 5;
+  width: min(560px, calc(100% - 36px));
+  transform: translateX(-50%);
+}
+.auth-prompt[hidden] { display: none; }
+.auth-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 16px;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: 0 14px 34px rgba(20, 24, 32, .18);
+}
+.auth-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.auth-title { margin: 0; color: var(--text); font-size: 13px; font-weight: 650; }
+.auth-hint { margin: 0; color: var(--text-muted); font-size: 12px; line-height: 17px; }
+.auth-close { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border: 0; border-radius: 4px; background: transparent; color: var(--text-muted); }
+.auth-close:hover { background: var(--surface-hover); color: var(--text); }
+.auth-close svg { width: 14px; height: 14px; }
+.auth-row { display: flex; gap: 8px; }
+.auth-row input { flex: 1; min-width: 0; }

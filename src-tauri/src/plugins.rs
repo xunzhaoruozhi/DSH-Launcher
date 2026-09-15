@@ -1,6 +1,36 @@
 use serde::Serialize;
-use std::{fs, io::Read, path::PathBuf, thread, time::Duration};
+use std::{
+    fs,
+    io::Read,
+    path::{Path, PathBuf},
+    thread,
+    time::Duration,
+};
 use tauri::{AppHandle, State};
+
+/// 建一个目录 junction。Windows 上 `link:` 依赖用的就是这种链接，标准库没有
+/// 直接的 API，走 mklink 最稳（不需要管理员权限，符号链接才需要）。
+#[cfg(windows)]
+fn junction_to(link: &Path, target: &Path) -> Result<(), String> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let status = std::process::Command::new("cmd")
+        .args(["/c", "mklink", "/J"])
+        .arg(link)
+        .arg(target)
+        .creation_flags(CREATE_NO_WINDOW)
+        .status()
+        .map_err(|error| error.to_string())?;
+    status
+        .success()
+        .then_some(())
+        .ok_or_else(|| format!("mklink 失败：{status}"))
+}
+
+#[cfg(not(windows))]
+fn junction_to(link: &Path, target: &Path) -> Result<(), String> {
+    std::os::unix::fs::symlink(target, link).map_err(|error| error.to_string())
+}
 
 use crate::{
     config::{dsh_home_for, read_config, LauncherConfig},
@@ -60,6 +90,34 @@ fn profile_manifest_path(config: &LauncherConfig) -> PathBuf {
         .join("profiles")
         .join("web")
         .join("package.json")
+}
+
+fn profile_dir(config: &LauncherConfig) -> PathBuf {
+    dsh_home_for(config).join("profiles").join("web")
+}
+
+/// `link:` 依赖本来指向的绝对目录。pnpm 在 Windows 上把 `link:E:/x` 当成相对
+/// 路径，于是把 junction 指向 `<profile>\E:\x` 这个不存在的拼接路径；用它还原
+/// 出真实目标来判断并重建。
+fn link_target(spec: &str) -> Option<PathBuf> {
+    let raw = spec.strip_prefix("link:")?.trim();
+    let path = PathBuf::from(raw.replace('/', "\\"));
+    path.is_absolute().then_some(path)
+}
+
+/// junction 目标是否被拼坏：落在 profile 目录下，且路径里又出现一个盘符段。
+fn is_mangled_link(profile: &Path, actual: &Path) -> bool {
+    if !actual.starts_with(profile) {
+        return false;
+    }
+    actual
+        .strip_prefix(profile)
+        .unwrap_or(actual)
+        .components()
+        .any(|component| {
+            let text = component.as_os_str().to_string_lossy();
+            text.len() == 2 && text.ends_with(':')
+        })
 }
 
 /// 依赖描述 → 安装渠道。npm 生态里 `owner/repo` 简写等价于 `github:owner/repo`。
@@ -343,6 +401,116 @@ pub async fn search_plugins(query: String) -> Result<Vec<PluginSearchResult>, St
     Ok(results)
 }
 
+/// 修复 pnpm 在 Windows 上留下的两处损坏，返回给用户看的说明行。
+///
+/// `dsh plugin` 内部跑 pnpm，而 pnpm 每次重装依赖都会（一）把跨盘符的
+/// `link:` junction 指向 `<profile>\<盘符>:\...` 这种拼接路径，插件因此静默
+/// 加载不到；（二）重写 profile package.json 时漏掉 `dsh.profile.bundles` 里
+/// 的部分条目，插件虽然装着却不再注册。两者都只在插件操作/升级后出现，所以
+/// 在这里收尾修掉，不必等下次启动报错才发现。
+fn repair_profile_after_pnpm(config: &LauncherConfig) -> Vec<String> {
+    let mut notes = Vec::new();
+    let profile = profile_dir(config);
+    let manifest_path = profile_manifest_path(config);
+    let Ok(text) = fs::read_to_string(&manifest_path) else {
+        return notes;
+    };
+    let Ok(mut manifest) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return notes;
+    };
+    let deps: Vec<(String, String)> = manifest
+        .get("dependencies")
+        .and_then(|value| value.as_object())
+        .map(|map| {
+            map.iter()
+                .filter_map(|(name, spec)| {
+                    Some((name.clone(), spec.as_str()?.to_string()))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // (一) 重建被拼坏的 link: junction。
+    let mut relinked = Vec::new();
+    for (name, spec) in &deps {
+        let Some(target) = link_target(spec) else {
+            continue;
+        };
+        if !target.is_dir() {
+            continue;
+        }
+        let link = profile.join("node_modules").join(name);
+        let Ok(actual) = fs::read_link(&link) else {
+            continue;
+        };
+        if !is_mangled_link(&profile, &actual) {
+            continue;
+        }
+        // 只删 junction 本身（symlink_metadata 不跟随），不动目标目录。
+        if fs::remove_dir(&link).is_err() {
+            continue;
+        }
+        if junction_to(&link, &target).is_ok() {
+            relinked.push(name.clone());
+        }
+    }
+    if !relinked.is_empty() {
+        notes.push(format!(
+            "已修复 {} 个被 pnpm 写坏的本地插件链接：{}",
+            relinked.len(),
+            relinked.join("、")
+        ));
+    }
+
+    // (二) 把带 bundle patch 却掉出 bundles 的依赖补回去。
+    let listed: Vec<String> = manifest
+        .pointer("/dsh/profile/bundles")
+        .and_then(|value| value.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    if !listed.is_empty() {
+        let missing: Vec<String> = deps
+            .iter()
+            .map(|(name, _)| name.clone())
+            .filter(|name| !listed.contains(name))
+            .filter(|name| {
+                installed_manifest(config, name)
+                    .and_then(|value| {
+                        value
+                            .pointer("/dsh/bundle/patch")
+                            .map(|patch| patch.is_string())
+                    })
+                    .unwrap_or(false)
+            })
+            .collect();
+        if !missing.is_empty() {
+            if let Some(bundles) = manifest
+                .pointer_mut("/dsh/profile/bundles")
+                .and_then(|value| value.as_array_mut())
+            {
+                for name in &missing {
+                    bundles.push(serde_json::Value::String(name.clone()));
+                }
+                if let Ok(serialized) = serde_json::to_string_pretty(&manifest) {
+                    if fs::write(&manifest_path, format!("{serialized}\n")).is_ok() {
+                        notes.push(format!(
+                            "已把 {} 个掉出 bundles 的插件补回注册：{}",
+                            missing.len(),
+                            missing.join("、")
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    notes
+}
+
 fn run_plugin_actions(
     app: &AppHandle,
     state: &AppState,
@@ -406,6 +574,11 @@ fn run_plugin_actions(
                 sections.push(format!("{header}\n{error}"));
             }
         }
+    }
+    // pnpm 跑完就地收尾：重建被写坏的本地链接、补回掉出 bundles 的插件。
+    // 必须在服务重启之前做，否则拉起来的还是坏状态。
+    for note in repair_profile_after_pnpm(&config) {
+        sections.push(note);
     }
     // 无论操作是否成功，只要之前在运行就把服务拉回来，
     // 不能让一次失败的插件操作把服务留在停止状态。

@@ -15,6 +15,7 @@ use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial, NSVisualEffectStat
 use crate::{
     download::handle_download_request,
     state::{AppState, Phase},
+    util::open_external_url,
 };
 
 // 标题栏的逻辑高度（px），前端 .titlebar 与这里必须一致；拖拽落点命中
@@ -24,6 +25,80 @@ use crate::{
 // 误判为“拖出成新窗口”。
 const TITLEBAR_LOGICAL_HEIGHT: f64 = 35.0;
 const TAB_DRAG_PREVIEW_LABEL: &str = "tab-drag-preview";
+
+// Links rendered inside the dsh iframe do not bubble to the launcher document.
+// Install the bridge in every frame so ordinary http(s) links reach the system
+// browser instead of navigating the embedded WebUI.
+const EXTERNAL_LINK_BRIDGE: &str = r#"
+(() => {
+  if (window.__DSH_LAUNCHER_EXTERNAL_LINKS__) return;
+  window.__DSH_LAUNCHER_EXTERNAL_LINKS__ = true;
+
+  const isLoopback = (hostname) => hostname === 'localhost'
+    || hostname === '127.0.0.1'
+    || hostname === '[::1]';
+
+  const openExternal = (value) => {
+    let url;
+    try { url = new URL(value, window.location.href); } catch { return false; }
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return false;
+    if (isLoopback(url.hostname)) return false;
+    const message = { type: 'dsh-launcher-open-external', url: url.href };
+    if (window === window.top) {
+      window.__TAURI_INTERNALS__?.invoke('open_external', { url: url.href });
+    } else {
+      window.top.postMessage(message, '*');
+    }
+    return true;
+  };
+
+  if (window === window.top) {
+    window.addEventListener('message', (event) => {
+      if (event.data?.type !== 'dsh-launcher-open-external'
+        || typeof event.data.url !== 'string') return;
+      openExternal(event.data.url);
+    });
+  }
+
+  const handleClick = (event) => {
+    if (event.defaultPrevented || event.button !== 0) return;
+    const target = event.target;
+    const anchor = target instanceof Element ? target.closest('a[href]') : null;
+    if (!anchor || anchor.hasAttribute('download')) return;
+    if (!openExternal(anchor.href)) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  };
+
+  document.addEventListener('click', handleClick, true);
+  document.addEventListener('auxclick', (event) => {
+    if (event.button !== 1) return;
+    const target = event.target;
+    const anchor = target instanceof Element ? target.closest('a[href]') : null;
+    if (!anchor || anchor.hasAttribute('download') || !openExternal(anchor.href)) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  }, true);
+})();
+"#;
+
+/// 窗口要加载的页面地址。
+///
+/// 生产构建走本机 HTTP（`http://localhost:<port>`）而不是 Tauri 内置协议：
+/// 内嵌的 dsh 页面与宿主同站，认证 Cookie 才不会被第三方 Cookie 策略丢掉。
+/// 开发构建沿用 dev server，它本身就在 localhost 上。
+fn launcher_url(app: &AppHandle) -> Result<WebviewUrl, String> {
+    if tauri::is_dev() {
+        return Ok(WebviewUrl::App("index.html".into()));
+    }
+    match app.try_state::<crate::webserve::FrontendPort>() {
+        Some(port) => format!("http://localhost:{}/index.html", port.0)
+            .parse()
+            .map(WebviewUrl::External)
+            .map_err(|error| format!("前端地址无效：{error}")),
+        None => Ok(WebviewUrl::App("index.html".into())),
+    }
+}
 
 fn next_window_label() -> String {
     static WINDOW_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -61,7 +136,7 @@ pub fn spawn_launcher_window_named(
     // the bundled frontend in production. External URLs do not reliably get
     // the launcher initialization scripts and window APIs.
     let (width, height) = size.unwrap_or((880.0, 760.0));
-    let mut builder = WebviewWindowBuilder::new(app, &label, WebviewUrl::App("index.html".into()))
+    let mut builder = WebviewWindowBuilder::new(app, &label, launcher_url(app)?)
         .title("DSH Launcher")
         .inner_size(width, height)
         .min_inner_size(620.0, 560.0)
@@ -86,12 +161,29 @@ pub fn spawn_launcher_window_named(
     {
         builder = builder.decorations(false);
     }
+    #[cfg(target_os = "windows")]
+    {
+        builder = builder.additional_browser_args(
+            "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --remote-debugging-port=9333",
+        );
+    }
     builder = match position {
         Some((x, y)) => builder.position(x, y),
         None => builder.center(),
     };
     let download_app = app.clone();
     let window = builder
+        // Install the click bridge in the dsh iframe as well as the launcher page.
+        .initialization_script_for_all_frames(EXTERNAL_LINK_BRIDGE)
+        // dsh WebUI 在 iframe 内，外层 document 的 click 事件收不到它的链接。
+        // 对 target=_blank/window.open，直接交给系统浏览器，避免在壳子里生成
+        // 一个没有认证上下文的新窗口。
+        .on_new_window(move |url, _features| {
+            if url.scheme() == "http" || url.scheme() == "https" {
+                let _ = open_external_url(url.as_str());
+            }
+            tauri::webview::NewWindowResponse::Deny
+        })
         .on_download(move |_webview, event| match event {
             DownloadEvent::Requested { url, destination } => {
                 handle_download_request(&download_app, &url, destination)

@@ -2,7 +2,14 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Permissions for the local launcher control window",
-  "windows": ["*"],
+  "windows": [
+    "*"
+  ],
+  "remote": {
+    "urls": [
+      "http://localhost:*"
+    ]
+  },
   "permissions": [
     "core:default",
     "core:window:allow-start-dragging",
@@ -13,6 +20,39 @@
     "core:window:allow-show",
     "core:window:allow-set-focus",
     "dialog:allow-open",
-    "dialog:allow-ask"
+    "dialog:allow-ask",
+    "allow-load-config",
+    "allow-default-config",
+    "allow-save-config",
+    "allow-save-window-size",
+    "allow-get-status",
+    "allow-start-dsh",
+    "allow-stop-dsh",
+    "allow-restart-dsh",
+    "allow-submit-auth-url",
+    "allow-auth-url-consumed",
+    "allow-clear-logs",
+    "allow-open-workspace",
+    "allow-list-config-files",
+    "allow-save-dsh-config",
+    "allow-open-dsh-config",
+    "allow-get-package-info",
+    "allow-update-dsh",
+    "allow-get-launcher-version",
+    "allow-check-launcher-update",
+    "allow-list-plugins",
+    "allow-search-plugins",
+    "allow-install-plugin",
+    "allow-remove-plugin",
+    "allow-update-plugins",
+    "allow-check-plugin-updates",
+    "allow-fetch-market",
+    "allow-open-external",
+    "allow-new-launcher-window",
+    "allow-take-initial-tab",
+    "allow-show-tab-drag-preview",
+    "allow-move-tab-drag-preview",
+    "allow-hide-tab-drag-preview",
+    "allow-drop-tab"
   ]
 }

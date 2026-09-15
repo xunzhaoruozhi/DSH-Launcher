@@ -43,6 +43,10 @@ pub struct LauncherConfig {
     pub download_ask: bool,
     pub download_choose_location: bool,
     pub auto_check_updates: bool,
+    /// 全局唤出快捷键（如 "Alt+Shift+D"）；空字符串表示禁用。
+    pub summon_shortcut: String,
+    /// 无外壳模式：隐藏整个顶部栏，只显示 dsh 内容；功能从托盘菜单唤出。
+    pub hide_shell: bool,
     pub window_width: u32,
     pub window_height: u32,
 }
@@ -74,6 +78,8 @@ impl Default for LauncherConfig {
             download_ask: false,
             download_choose_location: false,
             auto_check_updates: true,
+            summon_shortcut: "Alt+Shift+D".into(),
+            hide_shell: false,
             window_width: 880,
             window_height: 760,
         }
@@ -172,6 +178,8 @@ pub fn default_config() -> LauncherConfig {
 #[tauri::command]
 pub fn save_config(app: AppHandle, config: LauncherConfig) -> Result<LauncherConfig, String> {
     save_config_file(&app, &config)?;
+    // 保存即生效：按新配置重新注册全局唤出快捷键（内部走后台线程，主线程安全）。
+    crate::summon::apply(&app);
     Ok(config)
 }
 

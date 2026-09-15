@@ -20,17 +20,138 @@ pub struct OperationResult {
     pub output: String,
 }
 
+/// 按 PATH 顺序找可执行文件，返回第一个存在的完整路径。
+///
+/// 直接用进程环境里的 PATH 拼路径，不经过 where.exe：后者按控制台代码页
+/// 输出，中文安装路径会被读成乱码，而 PATH 本身在 Rust 里是 Unicode 的。
+#[cfg(windows)]
+fn find_in_path(name: &str) -> Option<String> {
+    let path = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&path) {
+        if dir.as_os_str().is_empty() {
+            continue;
+        }
+        let full = dir.join(name);
+        if full.is_file() {
+            return Some(full.to_string_lossy().into_owned());
+        }
+    }
+    None
+}
+
 #[cfg(windows)]
 pub fn hide_console(command: &mut Command) {
     // GUI 进程派生控制台子进程（npm/taskkill/dsh 等）时，缺少该标志会在
     // release 版弹出黑色控制台窗口。
+    //
+    // 必须连 CREATE_UNICODE_ENVIRONMENT 一起给：creation_flags 会替换默认
+    // 标志，少了它，环境块里的中文（本机 dsh 装在 E:\项目开发\...）会被按
+    // ANSI 解释成乱码，含中文路径的 .cmd 垫片直接起不来。
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    command.creation_flags(CREATE_NO_WINDOW);
+    const CREATE_UNICODE_ENVIRONMENT: u32 = 0x0000_0400;
+    command.creation_flags(CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT);
 }
 
 #[cfg(not(windows))]
 pub fn hide_console(_command: &mut Command) {}
+
+/// 把用户级环境变量里缺失的 DSH_* 补给子进程。
+///
+/// 桌面图标/资源管理器启动的 GUI 进程拿到的是「登录那一刻」的环境快照：
+/// 用户后来用 setx 写的 DSH_CLI_BIN、DSH_NODE_BIN 并不在里面，而本机 dsh 的
+/// 启动垫片（npm-global\dsh.cmd）正是靠这两个变量去找 CLI 入口，缺了就直接
+/// exit 1 且什么都不打印 —— 表现为启动器点启动没反应。这里从注册表补回缺的
+/// 两个值，让 GUI 里的行为和用户在终端敲 dsh 完全一致。
+#[cfg(windows)]
+pub fn merge_user_environment(command: &mut Command) {
+    for name in ["DSH_CLI_BIN", "DSH_NODE_BIN"] {
+        if std::env::var_os(name).is_some() {
+            continue;
+        }
+        if let Some(value) = read_user_environment(name) {
+            command.env(name, value);
+        }
+    }
+    merge_user_path(command);
+}
+
+/// 把注册表里用户级 PATH 的目录并进子进程 PATH。
+///
+/// 用户在设置面板里改过 PATH 之后，已经运行着的资源管理器不会刷新自己的
+/// 环境，于是从桌面图标启动的程序拿到的还是旧 PATH —— 恰好在 npm 全局目录
+/// （这里是自定义的 E:\开发环境\nodejs\npm-global）是后加的时候，启动器就
+/// 找不到 dsh，而同一台机器上新开的终端却能找到。这里按目录去重后补齐，
+/// 让两条路看到同一个 PATH。
+#[cfg(windows)]
+fn merge_user_path(command: &mut Command) {
+    let Some(user_path) = read_user_environment("PATH") else {
+        return;
+    };
+    let current = std::env::var("PATH").unwrap_or_default();
+    let existing: Vec<String> = current
+        .split(';')
+        .map(|part| part.trim().to_ascii_lowercase())
+        .collect();
+    let mut merged = current.clone();
+    for dir in user_path.split(';') {
+        let dir = dir.trim();
+        if dir.is_empty() || existing.iter().any(|item| item == &dir.to_ascii_lowercase()) {
+            continue;
+        }
+        if !merged.is_empty() {
+            merged.push(';');
+        }
+        merged.push_str(dir);
+    }
+    if merged != current {
+        command.env("PATH", merged);
+    }
+}
+
+#[cfg(not(windows))]
+pub fn merge_user_environment(_command: &mut Command) {}
+
+/// 读一个用户级环境变量（HKCU\Environment）的当前值。
+#[cfg(windows)]
+fn read_user_environment(name: &str) -> Option<String> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    // reg.exe 按控制台代码页输出，中文路径会变成乱码；先把代码页切到 UTF-8
+    // 再查，读回来的才是真路径。
+    const CREATE_UNICODE_ENVIRONMENT: u32 = 0x0000_0400;
+    let output = Command::new("cmd")
+        .args([
+            "/d",
+            "/s",
+            "/c",
+            &format!("chcp 65001 >nul && reg query HKCU\\Environment /v {name}"),
+        ])
+        .creation_flags(CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    for line in text.lines() {
+        let Some(rest) = line.trim_start().strip_prefix(name) else {
+            continue;
+        };
+        let rest = rest.trim_start();
+        // 列之间是制表/空格；值本身可能带空格（C:\Program Files\...），
+        // 所以按类型标记切一刀，后面原样保留。
+        let value = rest
+            .strip_prefix("REG_EXPAND_SZ")
+            .or_else(|| rest.strip_prefix("REG_SZ"))
+            .unwrap_or(rest)
+            .trim();
+        if !value.is_empty() {
+            return Some(value.to_string());
+        }
+    }
+    None
+}
 
 #[cfg(target_os = "macos")]
 pub fn adopt_login_shell_path() {
@@ -157,19 +278,11 @@ pub fn resolve_windows_executable(raw: &str) -> Result<String, String> {
         if has_path_separator && Path::new(candidate).is_file() {
             return Ok(candidate.clone());
         }
-        let mut where_command = Command::new("where.exe");
-        hide_console(&mut where_command);
-        let output = where_command.arg(candidate).output();
-        if let Ok(output) = output {
-            if output.status.success() {
-                if let Some(path) = String::from_utf8_lossy(&output.stdout)
-                    .lines()
-                    .map(str::trim)
-                    .find(|line| !line.is_empty())
-                {
-                    return Ok(path.to_string());
-                }
-            }
+        // 自己按 PATH 顺序找，不调 where.exe：外部命令按控制台代码页输出，
+        // 中文安装路径（本机 dsh 在 E:\项目开发\...）会被读成乱码，拿着乱码
+        // 路径去启动进程只会得到一个没有输出的退出码 1。
+        if let Some(path) = find_in_path(candidate) {
+            return Ok(path);
         }
     }
 
@@ -207,6 +320,16 @@ fn known_global_bin_dirs() -> Vec<std::path::PathBuf> {
     if let Some(programs) = std::env::var_os("ProgramFiles") {
         result.push(PathBuf::from(programs).join("nodejs"));
     }
+    // 桌面图标启动的进程有时拿不到用户后来改过的 PATH（资源管理器不刷新
+    // 自己的环境），把用户级 PATH 的目录也纳入兜底查找，免得连 dsh 都定位不到。
+    if let Some(user_path) = read_user_environment("PATH") {
+        for dir in user_path.split(';') {
+            let dir = dir.trim();
+            if !dir.is_empty() {
+                result.push(PathBuf::from(dir));
+            }
+        }
+    }
     result
 }
 
@@ -225,12 +348,14 @@ pub fn command_for_invocation(config: &LauncherConfig, args: &[String]) -> Resul
         command.args(["--yes", &config.npx_package]);
     }
     command.args(args);
+    merge_user_environment(&mut command);
     hide_console(&mut command);
     Ok(command)
 }
 
 pub fn prepare_command(mut command: Command, config: &LauncherConfig) -> Command {
     command.current_dir(&config.working_directory);
+    merge_user_environment(&mut command);
     if !config.dsh_home.trim().is_empty() {
         command.env("DSH_HOME", config.dsh_home.trim());
     }

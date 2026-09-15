@@ -14,14 +14,18 @@
 mod config;
 mod download;
 mod dsh_files;
+#[cfg(target_os = "windows")]
+mod free_drag;
 mod exec;
 mod market;
 mod plugins;
 mod service;
 mod state;
+mod summon;
 mod tray;
 mod updates;
 mod util;
+mod webserve;
 mod windows_ui;
 
 use std::{thread, time::Duration};
@@ -35,6 +39,7 @@ use state::AppState;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             config::load_config,
@@ -45,6 +50,10 @@ pub fn run() {
             service::start_dsh,
             service::stop_dsh,
             service::restart_dsh,
+            service::start_safe_mode,
+            service::exit_safe_mode,
+            service::submit_auth_url,
+            state::auth_url_consumed,
             state::clear_logs,
             windows_ui::open_workspace,
             dsh_files::list_config_files,
@@ -73,6 +82,19 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             exec::adopt_login_shell_path();
             tray::setup_tray(app)?;
+            // 生产构建把页面放到 http://localhost:<port>：内嵌的 dsh 页面要
+            // 和宿主同站，认证 Cookie 才落得下来（见 webserve 模块注释）。
+            // 开发构建仍然走 dev server，那里本来就是 localhost。
+            if !tauri::is_dev() {
+                match webserve::start(app.handle().clone()) {
+                    Ok(port) => {
+                        app.manage(webserve::FrontendPort(port));
+                    }
+                    Err(error) => {
+                        eprintln!("前端服务器启动失败，回退到内置协议：{error}");
+                    }
+                }
+            }
             // 主窗口也通过 builder 创建，这样它和分离出来的窗口都能挂载下载回调。
             windows_ui::spawn_launcher_window_named(
                 &app.handle(),
@@ -83,6 +105,11 @@ pub fn run() {
                 None,
             )?;
             windows_ui::setup_tab_drag_preview(app)?;
+            // 注册全局唤出快捷键（按配置；后台线程执行，避免主线程自锁）。
+            summon::apply(app.handle());
+            // 无外壳模式的全局长按拖动：按住左键半秒即可拖动任意位置。
+            #[cfg(target_os = "windows")]
+            free_drag::start(app.handle().clone());
             Ok(())
         })
         .on_window_event(|window, event| {

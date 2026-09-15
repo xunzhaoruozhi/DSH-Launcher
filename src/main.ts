@@ -14,6 +14,7 @@ import {
   FileText,
   FolderOpen,
   Github,
+  Link,
   LoaderCircle,
   Minus,
   PackageCheck,
@@ -24,6 +25,7 @@ import {
   Save,
   Search,
   Settings,
+  Shield,
   SlidersHorizontal,
   Square,
   TerminalSquare,
@@ -50,6 +52,8 @@ interface LauncherConfig {
   open_on_ready: boolean;
   close_behavior: "tray" | "exit";
   stop_dsh_on_exit: boolean;
+  summon_shortcut: string;
+  hide_shell: boolean;
   download_directory: string;
   download_ask: boolean;
   download_choose_location: boolean;
@@ -61,9 +65,20 @@ interface LauncherConfig {
 interface LauncherStatus {
   phase: Phase;
   message: string;
+  /** 给人看的干净地址（状态栏、刷新按钮），不带认证令牌。 */
   url: string;
+  /** 内嵌页面真正要装载的地址：dsh 0.1.2 起 Web 需要先带令牌换一次 cookie。 */
+  web_url: string | null;
+  /** 端口上的 dsh 要求浏览器认证（401）。 */
+  auth_required: boolean;
+  /** 本 WebView 已经认证过一次，不必再提示。 */
+  auth_satisfied: boolean;
   pid: number | null;
   external: boolean;
+  /** 当前服务以安全模式运行（一次性隔离 DSH_HOME）。 */
+  safe_mode: boolean;
+  /** 连续启动失败次数；达到阈值时错误界面亮出安全模式入口。 */
+  consecutive_failures: number;
   logs: string[];
   busy: string | null;
 }
@@ -118,6 +133,7 @@ interface MarketCatalog { plugins: MarketPlugin[]; fetched_at: number; }
 const app = document.querySelector<HTMLDivElement>("#app")!;
 app.innerHTML = `
   <div class="shell">
+    <div id="shell-drag-strip" class="shell-drag-strip" data-tauri-drag-region title="拖动窗口，双击最大化/还原"></div>
     <header class="titlebar" data-tauri-drag-region>
       <nav class="toolbar-left" aria-label="DSH Launcher 工具">
         <button class="tool-button" data-dialog="manage-dialog" title="管理"><i data-lucide="package-check"></i><span>管理</span></button>
@@ -139,11 +155,31 @@ app.innerHTML = `
       </nav>
     </header>
 
+    <div id="safe-mode-banner" class="safe-mode-banner" hidden>
+      <i data-lucide="shield"></i>
+      <span>安全模式 · 一次性隔离环境运行中，正式数据未加载</span>
+      <button id="exit-safe-mode" type="button" title="停掉安全模式、删除临时目录，用正式环境重新启动"><i data-lucide="rotate-ccw"></i><span>退出并正常重启</span></button>
+    </div>
+
     <main id="workspace-view" class="workspace-view">
       <div id="workspace-state" class="workspace-state" data-phase="stopped">
         <button id="workspace-start" class="whale-button" type="button" aria-label="启动 dsh" title="启动 dsh"><span class="whale-wave whale-wave-one"></span><span class="whale-wave whale-wave-two"></span><img src="${whaleIconUrl}" alt="DeepSeek" draggable="false"></button>
         <h2 id="workspace-title">正在准备 dsh</h2>
         <p id="workspace-message">启动器会在服务就绪后载入 WebUI。</p>
+        <button id="workspace-safe" type="button" title="用一次性隔离环境启动 dsh：不加载插件和正式数据，适合排查启动失败" hidden><i data-lucide="shield"></i><span>进入安全模式</span></button>
+      </div>
+      <div id="auth-prompt" class="auth-prompt" hidden>
+        <div class="auth-card">
+          <div class="auth-head">
+            <p class="auth-title">这个 dsh 是别处启动的，需要认证</p>
+            <button id="auth-close" class="auth-close" type="button" title="暂不处理"><i data-lucide="x"></i></button>
+          </div>
+          <p class="auth-hint">它是你在终端里自己起的 dsh，认证钥匙只打印在那个终端里，启动器拿不到。两条路任选：① 把终端里 <code>dsh web: http://127.0.0.1:3080/?token=…</code> 那一行整条粘到下面；② 或者回终端按 Ctrl+C 关掉它，再点启动让启动器自己拉起 dsh —— 那样会自动认证，以后不用再管。</p>
+          <div class="auth-row">
+            <input id="auth-url" type="text" autocomplete="off" spellcheck="false" placeholder="http://127.0.0.1:3080/?token=…">
+            <button id="auth-submit" class="button primary" type="button"><i data-lucide="link"></i><span>连接</span></button>
+          </div>
+        </div>
       </div>
     </main>
 
@@ -215,7 +251,8 @@ app.innerHTML = `
       <section class="modal-panel settings-panel" role="dialog" aria-modal="true" aria-labelledby="settings-title">
         <header class="modal-header"><div><p class="eyebrow">DSH LAUNCHER</p><h2 id="settings-title">设置</h2></div><button class="modal-close" data-close-modal title="关闭"><i data-lucide="x"></i></button></header>
         <div class="settings-content">
-          <div class="settings-section"><p class="eyebrow">WINDOW</p><h3>关闭按钮行为</h3><div class="segmented wide"><label><input type="radio" name="close_behavior" value="tray"><span>最小化到托盘</span></label><label><input type="radio" name="close_behavior" value="exit"><span>退出 Launcher</span></label></div></div>
+          <div class="settings-section"><p class="eyebrow">WINDOW</p><h3>关闭按钮行为</h3><div class="segmented wide"><label><input type="radio" name="close_behavior" value="tray"><span>最小化到托盘</span></label><label><input type="radio" name="close_behavior" value="exit"><span>退出 Launcher</span></label></div>
+            <div class="field full"><label for="setting-summon-shortcut">全局唤出快捷键</label><div class="input-with-hint"><input id="setting-summon-shortcut" autocomplete="off" spellcheck="false" placeholder="例如 Alt+Shift+D"><small class="field-hint">任意程序里按下即唤出/收起主窗口，留空则禁用</small></div></div><label class="check-row compact"><input id="setting-hide-shell" type="checkbox"><span><strong>隐藏顶部外壳</strong><small>窗口只显示 dsh 内容；插件、设置等全部从托盘菜单唤出</small></span></label></div>
           <label class="check-row"><input id="setting-auto-start" type="checkbox"><span><strong>启动后自动启动 dsh Web 服务</strong><small>Launcher 打开后立即启动本地服务</small></span></label>
           <label class="check-row"><input id="setting-stop-dsh" type="checkbox"><span><strong>退出 Launcher 时结束 dsh</strong><small>只结束由当前 Launcher 启动并登记的进程树</small></span></label>
           <div class="settings-section download-section"><p class="eyebrow">DOWNLOAD</p><h3>下载</h3>
@@ -247,11 +284,13 @@ app.innerHTML = `
 // 因此 Windows 永远不加该类、布局与作者原始版本完全一致。
 if (/Mac/i.test(navigator.userAgent)) document.body.classList.add("os-macos");
 
-createIcons({ icons: { CircleAlert, CircleCheck, Code2, Download, ExternalLink, Eye, FileCog, FileText, FolderOpen, Github, LoaderCircle, Minus, PackageCheck, Plus, Puzzle, RefreshCw, RotateCcw, Save, Search, Settings, SlidersHorizontal, Square, TerminalSquare, Trash2, Wrench, X } });
+createIcons({ icons: { CircleAlert, CircleCheck, Code2, Download, ExternalLink, Eye, FileCog, FileText, FolderOpen, Github, Link, LoaderCircle, Minus, PackageCheck, Plus, Puzzle, RefreshCw, RotateCcw, Save, Search, Settings, Shield, SlidersHorizontal, Square, TerminalSquare, Trash2, Wrench, X } });
 const $ = <T extends HTMLElement = HTMLInputElement>(selector: string): T => document.querySelector<T>(selector)!;
 const currentWindow = getCurrentWindow();
 let config: LauncherConfig;
-let status: LauncherStatus = { phase: "stopped", message: "dsh 尚未启动", url: "http://127.0.0.1:3080", pid: null, external: false, logs: [], busy: null };
+let status: LauncherStatus = { phase: "stopped", message: "dsh 尚未启动", url: "http://127.0.0.1:3080", web_url: null, auth_required: false, auth_satisfied: false, pid: null, external: false, safe_mode: false, consecutive_failures: 0, logs: [], busy: null };
+// 认证提示条是否被用户按下了「暂不处理」。
+let authPromptClosed = false;
 let configFiles: ConfigFileInfo[] = [];
 let toastTimer: number | undefined;
 let tabs: TabState[] = [];
@@ -326,8 +365,13 @@ function fillForm(value: LauncherConfig): void {
   $("#port").value = String(value.port);
   updateModeFields();
 }
+function applyShellMode(): void {
+  document.querySelector(".shell")!.classList.toggle("shell-hidden", !!config.hide_shell);
+}
 function fillSettings(): void {
   $<HTMLInputElement>(`input[name="close_behavior"][value="${config.close_behavior}"]`).checked = true;
+  $("#setting-summon-shortcut").value = config.summon_shortcut;
+  $("#setting-hide-shell").checked = config.hide_shell;
   $("#setting-auto-start").checked = config.auto_start;
   $("#setting-stop-dsh").checked = config.stop_dsh_on_exit;
   $("#setting-download-directory").value = config.download_directory;
@@ -340,6 +384,8 @@ function fillSettings(): void {
 function readSettings(): LauncherConfig {
   return { ...config,
     close_behavior: ($<HTMLInputElement>("input[name=close_behavior]:checked")).value as "tray" | "exit",
+    summon_shortcut: $("#setting-summon-shortcut").value.trim(),
+    hide_shell: $("#setting-hide-shell").checked,
     auto_start: $("#setting-auto-start").checked,
     stop_dsh_on_exit: $("#setting-stop-dsh").checked,
     download_directory: $("#setting-download-directory").value.trim(),
@@ -352,6 +398,7 @@ async function saveSettings(): Promise<void> {
   try {
     config = await invoke<LauncherConfig>("save_config", { config: readSettings() });
     fillForm(config);
+    applyShellMode();
     $("#settings-save-result").textContent = "已保存";
     toast("设置已保存");
   } catch (error) { toast(String(error), true); }
@@ -418,9 +465,28 @@ function updateTabDensity(): void {
   strip.classList.toggle("dense", tabs.length * 48 > available);
 }
 
+// 内嵌页面必须和宿主页面同站，认证 Cookie 才落得下来：跨站 iframe 的
+// Set-Cookie 会被浏览器的第三方 Cookie 策略丢掉（WebView2 实测同样如此），
+// 之后每个请求都是 401。dsh 地址里的回环 host 一律换成当前页面的 host。
+function frameUrl(raw: string): string {
+  const host = window.location.hostname;
+  if (!host) return raw;
+  try {
+    const url = new URL(raw);
+    if (url.hostname !== host) url.hostname = host;
+    return url.toString();
+  } catch {
+    return raw;
+  }
+}
+
 function syncFrames(): void {
   const ready = status.phase === "ready";
   $("#workspace-state").hidden = ready;
+  // dsh 自 0.1.2 起给 Web 加了浏览器认证：内嵌页面必须先用启动时打印的带令牌
+  // 地址换一次 cookie，裸地址一律 401。没有令牌地址（老版本，或已经换过 cookie）
+  // 时沿用干净地址。
+  const target = frameUrl(status.web_url ?? status.url);
   for (const tab of tabs) {
     if (ready && tab.id === activeTab) {
       if (!tab.frame) {
@@ -434,17 +500,18 @@ function syncFrames(): void {
         frame.hidden = true;
         frame.addEventListener("load", () => {
           if (tab.id === activeTab) frame.hidden = false;
+          consumeAuthUrl(tab);
         });
         tab.frame = frame;
       }
       // 只在地址变化或被标记过期时装载。iframe.src 的 getter 会把地址规范化
-      // （补上尾部斜杠），与 status.url 直接比较永远不相等，因此自己记录
+      // （补上尾部斜杠），与目标地址直接比较永远不相等，因此自己记录
       // loadedUrl，避免每条状态事件（包括日志推送）都触发一次 WebUI 重载。
-      if (tab.loadedUrl !== status.url || tab.stale) {
+      if (tab.loadedUrl !== target || tab.stale) {
         // 重载期间先隐藏、load 后揭晓，避免空白闪烁。
         tab.frame.hidden = true;
-        tab.frame.src = status.url;
-        tab.loadedUrl = status.url;
+        tab.frame.src = target;
+        tab.loadedUrl = target;
         tab.stale = false;
       } else {
         // 已加载完成的标签直接显示（切换回来不应闪屏）。
@@ -454,6 +521,16 @@ function syncFrames(): void {
       tab.frame.hidden = true;
     }
   }
+  syncAuthPrompt();
+}
+
+// 带令牌的地址用完即弃：cookie 已经落进 WebView，那个一次性令牌在 dsh 下次
+// 重启后必然失效。这里把标签记录的地址同步改回干净地址，避免立刻重载一次。
+function consumeAuthUrl(tab: TabState): void {
+  const used = status.web_url;
+  if (!used || tab.loadedUrl !== frameUrl(used)) return;
+  tab.loadedUrl = frameUrl(status.url);
+  void invoke<LauncherStatus>("auth_url_consumed").then(renderStatus).catch(() => undefined);
 }
 
 function addTab(title?: string): void {
@@ -657,8 +734,10 @@ function renderStatus(next: LauncherStatus): void {
   // 跳过本次整轮 DOM 更新，避免冗余重绘导致的主线程抖动。busy 必须参与比较：
   // OpsBusy 进入/退出维护态时只改这一个字段就广播，漏掉它会让“维护中”与
   // 启动/停止/重启的禁用状态永远不刷新。
-  if (next.phase === status.phase && next.message === status.message && next.url === status.url && next.pid === status.pid && next.external === status.external && next.busy === status.busy) return;
+  if (next.phase === status.phase && next.message === status.message && next.url === status.url && next.web_url === status.web_url && next.auth_required === status.auth_required && next.auth_satisfied === status.auth_satisfied && next.pid === status.pid && next.external === status.external && next.safe_mode === status.safe_mode && next.consecutive_failures === status.consecutive_failures && next.busy === status.busy) return;
   const wasReady = status.phase === "ready";
+  // 认证开关重新亮起（例如外部 dsh 重启过）时，把「暂不处理」的收起状态复位。
+  if (next.auth_required !== status.auth_required) authPromptClosed = false;
   status = next;
   const externalReady = next.phase === "ready" && next.external;
   // 互斥操作（插件安装/卸载/更新、dsh 更新）进行中：服务已被操作方停下并会
@@ -669,6 +748,9 @@ function renderStatus(next: LauncherStatus): void {
   state.dataset.phase = next.phase;
   $("#workspace-title").textContent = maintenance ? (next.busy ?? "操作进行中") : next.phase === "failed" ? "dsh 启动失败" : next.phase === "starting" ? "正在启动 dsh" : "dsh 尚未运行";
   $("#workspace-message").textContent = maintenance ? "操作完成后会自动恢复服务，请稍候。" : next.message;
+  // 安全模式横幅与错误界面的安全模式入口。
+  $("#safe-mode-banner").hidden = !next.safe_mode;
+  $<HTMLButtonElement>("#workspace-safe").hidden = !(next.phase === "failed" && next.consecutive_failures >= 2);
   const startButton = $<HTMLButtonElement>("#workspace-start");
   startButton.toggleAttribute("disabled", maintenance || next.phase === "starting" || next.phase === "stopping");
   const actionLabel = maintenance ? (next.busy ?? "操作进行中") : next.phase === "failed" ? "重启 dsh" : next.phase === "starting" ? "正在连接 dsh" : "启动 dsh";
@@ -687,6 +769,44 @@ function renderStatus(next: LauncherStatus): void {
   if (next.phase === "ready" && !wasReady) tabs.forEach((tab) => { tab.stale = true; });
   syncFrames();
 }
+// —— 浏览器认证提示 ——
+// dsh 自 0.1.2 起要求先用启动时打印的带令牌地址换一次 cookie。启动器自己拉起的
+// dsh 能从它的输出里认到那行地址；外部接管的拿不到，只能请用户粘贴一次。
+// 这条提示本身可以忽略：后端的探测请求不带 WebView 的 cookie，页面能正常用时
+// 关掉它即可。
+function authPromptNeeded(): boolean {
+  return status.phase === "ready" && status.auth_required && !status.auth_satisfied && !status.web_url;
+}
+
+function syncAuthPrompt(): void {
+  $("#auth-prompt").hidden = !authPromptNeeded() || authPromptClosed;
+}
+
+async function submitAuthUrl(): Promise<void> {
+  const input = $("#auth-url");
+  const value = input.value.trim();
+  if (!value) {
+    toast("先粘贴 dsh 打印的那行地址", true);
+    return;
+  }
+  try {
+    renderStatus(await invoke<LauncherStatus>("submit_auth_url", { url: value }));
+    input.value = "";
+    authPromptClosed = false;
+  } catch (error) {
+    toast(String(error), true);
+  }
+}
+
+$("#auth-close").addEventListener("click", () => {
+  authPromptClosed = true;
+  syncAuthPrompt();
+});
+$("#auth-submit").addEventListener("click", () => { void submitAuthUrl(); });
+$("#auth-url").addEventListener("keydown", (event) => {
+  if (event.key === "Enter") void submitAuthUrl();
+});
+
 function refreshWeb(): void {
   const tab = tabs.find((item) => item.id === activeTab);
   if (status.phase !== "ready" || !tab?.frame || !tab.loadedUrl) { toast("dsh Web 服务尚未就绪", true); return; }
@@ -1075,6 +1195,8 @@ $("#update-package").addEventListener("click", async () => {
 $("#manage-restart").addEventListener("click", () => void runAction("restart_dsh"));
 $("#manage-stop").addEventListener("click", () => void runAction("stop_dsh"));
 $("#workspace-start").addEventListener("click", () => void runAction("start_dsh"));
+$("#workspace-safe").addEventListener("click", () => void invoke("start_safe_mode").catch((error) => toast(String(error), true)));
+$("#exit-safe-mode").addEventListener("click", () => void invoke("exit_safe_mode").catch((error) => toast(String(error), true)));
 $("#plugin-spec").addEventListener("keydown", (event) => { if (event.key === "Enter") void installPlugin(); });
 $("#install-plugin").addEventListener("click", () => void installPlugin());
 $("#plugin-search-button").addEventListener("click", () => void searchPlugins());
@@ -1153,6 +1275,9 @@ async function init(): Promise<void> {
   await listen<LauncherStatus>("launcher-status", (event) => renderStatus(event.payload));
   // 其他窗口把标签拖到本窗口顶栏时，由后端路由过来收编。
   await listen<{ title: string }>("adopt-tab", (event) => addTab(event.payload.title));
+  // 托盘菜单唤出的功能：打开对应面板 / 刷新页面（只在主窗口处理）。
+  await listen<string>("open-dialog", (event) => { if (currentWindow.label === "control") showDialog(event.payload as DialogId); });
+  await listen("refresh-web", () => { if (currentWindow.label === "control") refreshWeb(); });
   const [loadedConfig, loadedStatus, version, initialTab] = await Promise.all([
     invoke<LauncherConfig>("load_config"),
     invoke<LauncherStatus>("get_status"),
@@ -1175,6 +1300,7 @@ async function init(): Promise<void> {
   addTab(initialTab ?? undefined);
   fillForm(config);
   fillSettings();
+  applyShellMode();
   renderStatus(loadedStatus);
   await revealWindow();
   if (currentWindow.label === "control" && config.auto_check_updates) void checkLauncherUpdate(false);

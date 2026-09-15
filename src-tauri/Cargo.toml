@@ -21,9 +21,14 @@ tauri = { version = "2", features = ["tray-icon", "macos-private-api"] }
 tauri-plugin-dialog = "2"
 rfd = "0.16"
 ureq = "2"
+tauri-plugin-global-shortcut = "2"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+# 无外壳模式的全局长按拖动（free_drag.rs）：轮询键态/光标 + 命中测试。
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse"] }
 
 # 只有 macOS 用它做标题栏的原生振动模糊，别让 Windows/Linux 白编译一遍。
 [target.'cfg(target_os = "macos")'.dependencies]

@@ -107,8 +107,11 @@ pub fn version_key(value: &str) -> VersionKey {
     VersionKey { core, pre }
 }
 
-#[tauri::command]
-pub fn open_external(url: String) -> Result<(), String> {
+/// 打开一个受信任的网页链接到系统默认浏览器。
+///
+/// 这个函数同时给 Tauri 命令和 WebView 的新窗口拦截器使用；后者运行在
+/// iframe 外层，不能通过前端的 document click 监听来复用命令。
+pub fn open_external_url(url: &str) -> Result<(), String> {
     if !url.starts_with("https://") && !url.starts_with("http://") {
         return Err("只允许打开 http(s) 链接".into());
     }
@@ -117,25 +120,30 @@ pub fn open_external(url: String) -> Result<(), String> {
         let mut command = Command::new("explorer.exe");
         crate::exec::hide_console(&mut command);
         command
-            .arg(&url)
+            .arg(url)
             .spawn()
             .map_err(|error| error.to_string())?;
     }
     #[cfg(target_os = "macos")]
     {
         Command::new("open")
-            .arg(&url)
+            .arg(url)
             .spawn()
             .map_err(|error| error.to_string())?;
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
         Command::new("xdg-open")
-            .arg(&url)
+            .arg(url)
             .spawn()
             .map_err(|error| error.to_string())?;
     }
     Ok(())
+}
+
+#[tauri::command]
+pub fn open_external(url: String) -> Result<(), String> {
+    open_external_url(&url)
 }
 
 #[cfg(test)]
