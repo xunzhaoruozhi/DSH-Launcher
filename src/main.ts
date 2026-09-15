@@ -140,6 +140,7 @@ app.innerHTML = `
         <button class="tool-button" data-dialog="config-dialog" title="配置"><i data-lucide="sliders-horizontal"></i><span>配置</span></button>
         <button class="tool-button" data-dialog="plugin-dialog" title="插件"><i data-lucide="puzzle"></i><span>插件</span></button>
         <button class="tool-button" data-dialog="settings-dialog" title="设置"><i data-lucide="settings"></i><span>设置</span></button>
+        <button id="toolbar-safe" class="tool-button" type="button" title="进入安全模式：一次性隔离环境启动 dsh，不加载插件与正式数据"><i data-lucide="shield"></i><span>安全模式</span></button>
         <button id="new-window" class="tool-button" title="新建窗口"><i data-lucide="plus"></i><span>新建</span></button>
       </nav>
       <div id="tab-zone" class="tab-zone" data-tauri-drag-region>
@@ -751,6 +752,10 @@ function renderStatus(next: LauncherStatus): void {
   // 安全模式横幅与错误界面的安全模式入口。
   $("#safe-mode-banner").hidden = !next.safe_mode;
   $<HTMLButtonElement>("#workspace-safe").hidden = !(next.phase === "failed" && next.consecutive_failures >= 2);
+  // 顶栏按钮随状态切换「进入 / 退出」。
+  const toolbarSafe = $<HTMLButtonElement>("#toolbar-safe");
+  toolbarSafe.querySelector("span")!.textContent = next.safe_mode ? "退出安全模式" : "安全模式";
+  toolbarSafe.title = next.safe_mode ? "退出安全模式：删除一次性目录，用正式环境重新启动" : "进入安全模式：一次性隔离环境启动 dsh，不加载插件与正式数据";
   const startButton = $<HTMLButtonElement>("#workspace-start");
   startButton.toggleAttribute("disabled", maintenance || next.phase === "starting" || next.phase === "stopping");
   const actionLabel = maintenance ? (next.busy ?? "操作进行中") : next.phase === "failed" ? "重启 dsh" : next.phase === "starting" ? "正在连接 dsh" : "启动 dsh";
@@ -1197,6 +1202,7 @@ $("#manage-stop").addEventListener("click", () => void runAction("stop_dsh"));
 $("#workspace-start").addEventListener("click", () => void runAction("start_dsh"));
 $("#workspace-safe").addEventListener("click", () => void invoke("start_safe_mode").catch((error) => toast(String(error), true)));
 $("#exit-safe-mode").addEventListener("click", () => void invoke("exit_safe_mode").catch((error) => toast(String(error), true)));
+$("#toolbar-safe").addEventListener("click", () => void invoke(status.safe_mode ? "exit_safe_mode" : "start_safe_mode").catch((error) => toast(String(error), true)));
 $("#plugin-spec").addEventListener("keydown", (event) => { if (event.key === "Enter") void installPlugin(); });
 $("#install-plugin").addEventListener("click", () => void installPlugin());
 $("#plugin-search-button").addEventListener("click", () => void searchPlugins());
