@@ -83,6 +83,14 @@ fn cleanup_safe_mode_home(app: &AppHandle) {
     }
 }
 
+/// 让系统分配一个空闲端口（安全模式专用：与正式服务互不干扰，可同时运行）。
+fn free_port() -> Option<u16> {
+    TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+        .ok()
+        .and_then(|listener| listener.local_addr().ok())
+        .map(|addr| addr.port())
+}
+
 fn wait_for_port_free(port: u16) -> bool {
     // 重启场景里旧进程刚被结束，给系统一点时间释放监听端口。
     for _ in 0..10 {
@@ -268,8 +276,13 @@ fn start_process_with(
     state: AppState,
     safe_mode: bool,
 ) -> Result<LauncherStatus, String> {
-    let config = read_config(&app)?;
+    let mut config = read_config(&app)?;
     validate_config(&config)?;
+    // 安全模式自己找一个空闲端口：正式服务（哪怕坏着）继续占着配置端口
+    // 也不影响，两边可以同时运行，互不干扰。
+    if safe_mode {
+        config.port = free_port().ok_or("没有可用端口，无法进入安全模式")?;
+    }
     // 先把一次性目录准备好（失败早退，不动运行状态）。
     let safe_home = if safe_mode {
         Some(reset_safe_mode_home(&app)?)
@@ -315,14 +328,6 @@ fn start_process_with(
     };
     if !port_free {
         if http_service_alive(config.port) {
-            // 安全模式必须独占端口：沿用一个外部服务等于把可能坏掉的正式
-            // 环境又请回来，安全模式就失去意义了。
-            if safe_mode {
-                return Err(format!(
-                    "端口 {} 上有一个外部启动的 dsh。安全模式需要用自己的隔离环境启动，请先在那个终端里按 Ctrl+C 关掉它，再点一次进入安全模式。",
-                    config.port
-                ));
-            }
             return attach_external(app, state, generation, config.port);
         }
         if !wait_for_port_free(config.port) {
