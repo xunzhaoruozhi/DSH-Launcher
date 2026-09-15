@@ -14,7 +14,7 @@ use crate::{
 };
 
 const LAUNCHER_RELEASE_API: &str =
-    "https://api.github.com/repos/WEP-56/DSH-Launcher/releases/latest";
+    "https://api.github.com/repos/xunzhaoruozhi/DSH-Launcher/releases/latest";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PackageInfo {
