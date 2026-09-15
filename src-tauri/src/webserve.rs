@@ -99,6 +99,14 @@ fn serve(app: &AppHandle, mut stream: TcpStream) -> std::io::Result<()> {
             .map(|(_, body)| body.to_string())
             .unwrap_or_default();
         let _ = app.emit("launcher-notify", body);
+        // 自定义音效（Cursor 风格 mp3）在启动器侧播放；系统内置音由前端传给 toast。
+        #[cfg(target_os = "windows")]
+        if let Ok(config) = crate::config::read_config(app) {
+            let sound = config.notify_sound;
+            if !sound.is_empty() && !crate::sounds::TOAST_SOUNDS.contains(&sound.as_str()) {
+                crate::sounds::play(app, &sound);
+            }
+        }
         stream.write_all(
             b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 11\r\nconnection: close\r\n\r\n{\"ok\":true}",
         )?;

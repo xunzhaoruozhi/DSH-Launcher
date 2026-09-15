@@ -15,6 +15,8 @@ mod config;
 mod download;
 mod dsh_files;
 #[cfg(target_os = "windows")]
+mod sounds;
+#[cfg(target_os = "windows")]
 mod theme_sync;
 mod exec;
 mod market;

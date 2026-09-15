@@ -19,6 +19,9 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "resources": {
+      "sounds/*": "sounds/"
+    },
     "category": "DeveloperTool",
     "shortDescription": "Desktop launcher for DeepSeek Harness",
     "longDescription": "Starts and manages dsh web in a native desktop window.",
