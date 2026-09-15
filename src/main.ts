@@ -54,7 +54,6 @@ interface LauncherConfig {
   close_behavior: "tray" | "exit";
   stop_dsh_on_exit: boolean;
   summon_shortcut: string;
-  hide_shell: boolean;
   download_directory: string;
   download_ask: boolean;
   download_choose_location: boolean;
@@ -64,6 +63,7 @@ interface LauncherConfig {
   notify_turn_failed: boolean;
   notify_job_completed: boolean;
   notify_job_failed: boolean;
+  notify_sound: string;
   window_width: number;
   window_height: number;
 }
@@ -139,7 +139,6 @@ interface MarketCatalog { plugins: MarketPlugin[]; fetched_at: number; }
 const app = document.querySelector<HTMLDivElement>("#app")!;
 app.innerHTML = `
   <div class="shell">
-    <div id="shell-drag-strip" class="shell-drag-strip" data-tauri-drag-region title="拖动窗口，双击最大化/还原"></div>
     <header class="titlebar" data-tauri-drag-region>
       <nav class="toolbar-left" aria-label="DSH Launcher 工具">
         <button class="tool-button" data-dialog="manage-dialog" title="管理"><i data-lucide="package-check"></i><span>管理</span></button>
@@ -259,7 +258,7 @@ app.innerHTML = `
         <header class="modal-header"><div><p class="eyebrow">DSH LAUNCHER</p><h2 id="settings-title">设置</h2></div><button class="modal-close" data-close-modal title="关闭"><i data-lucide="x"></i></button></header>
         <div class="settings-content">
           <div class="settings-section"><p class="eyebrow">WINDOW</p><h3>关闭按钮行为</h3><div class="segmented wide"><label><input type="radio" name="close_behavior" value="tray"><span>最小化到托盘</span></label><label><input type="radio" name="close_behavior" value="exit"><span>退出 Launcher</span></label></div>
-            <div class="field full"><label for="setting-summon-shortcut">全局唤出快捷键</label><div class="input-with-hint"><input id="setting-summon-shortcut" autocomplete="off" spellcheck="false" placeholder="例如 Alt+Shift+D"><small class="field-hint">任意程序里按下即唤出/收起主窗口，留空则禁用</small></div></div><!-- 无外壳模式已弃用（拖动手感不佳），选项下线；代码保留默认关闭。 --><label class="check-row compact" hidden><input id="setting-hide-shell" type="checkbox"><span><strong>隐藏顶部外壳</strong><small>窗口只显示 dsh 内容；插件、设置等全部从托盘菜单唤出</small></span></label></div>
+            <div class="field full"><label for="setting-summon-shortcut">全局唤出快捷键</label><div class="input-with-hint"><input id="setting-summon-shortcut" autocomplete="off" spellcheck="false" placeholder="例如 Alt+Shift+D"><small class="field-hint">任意程序里按下即唤出/收起主窗口，留空则禁用</small></div></div></div>
           <label class="check-row"><input id="setting-auto-start" type="checkbox"><span><strong>启动后自动启动 dsh Web 服务</strong><small>Launcher 打开后立即启动本地服务</small></span></label>
           <label class="check-row"><input id="setting-stop-dsh" type="checkbox"><span><strong>退出 Launcher 时结束 dsh</strong><small>只结束由当前 Launcher 启动并登记的进程树</small></span></label>
           <div class="settings-section"><p class="eyebrow">NOTIFY</p><h3>桌面通知</h3>
@@ -268,6 +267,7 @@ app.innerHTML = `
             <label class="check-row compact"><input id="setting-notify-turn-failed" type="checkbox"><span><strong>回合失败时通知</strong><small>回合出错或达到长度上限</small></span></label>
             <label class="check-row compact"><input id="setting-notify-job-completed" type="checkbox"><span><strong>后台任务完成时通知</strong><small>后台任务正常结束</small></span></label>
             <label class="check-row compact"><input id="setting-notify-job-failed" type="checkbox"><span><strong>后台任务失败时通知</strong><small>后台任务出错</small></span></label>
+            <div class="field full"><label for="setting-notify-sound">通知声音</label><select id="setting-notify-sound"><option value="">无声</option><option value="Default">系统默认</option><option value="IM">即时消息</option><option value="Mail">邮件</option><option value="Reminder">提醒</option><option value="SMS">短信</option><option value="Alarm">闹钟</option><option value="Alarm2">闹钟 2</option><option value="Call">来电</option></select></div>
           </div>
           <div class="settings-section download-section"><p class="eyebrow">DOWNLOAD</p><h3>下载</h3>
             <div class="field full"><label for="setting-download-directory">默认下载目录</label><div class="path-input"><input id="setting-download-directory" autocomplete="off" spellcheck="false"><button id="browse-download-directory" type="button" class="icon-button" title="选择下载目录"><i data-lucide="folder-open"></i></button></div></div>
@@ -380,13 +380,9 @@ function fillForm(value: LauncherConfig): void {
   $("#port").value = String(value.port);
   updateModeFields();
 }
-function applyShellMode(): void {
-  document.querySelector(".shell")!.classList.toggle("shell-hidden", !!config.hide_shell);
-}
 function fillSettings(): void {
   $<HTMLInputElement>(`input[name="close_behavior"][value="${config.close_behavior}"]`).checked = true;
   $("#setting-summon-shortcut").value = config.summon_shortcut;
-  $("#setting-hide-shell").checked = config.hide_shell;
   $("#setting-auto-start").checked = config.auto_start;
   $("#setting-stop-dsh").checked = config.stop_dsh_on_exit;
   $("#setting-download-directory").value = config.download_directory;
@@ -398,6 +394,7 @@ function fillSettings(): void {
   $("#setting-notify-turn-failed").checked = config.notify_turn_failed;
   $("#setting-notify-job-completed").checked = config.notify_job_completed;
   $("#setting-notify-job-failed").checked = config.notify_job_failed;
+  $("#setting-notify-sound").value = config.notify_sound;
   $("#launcher-version").textContent = launcherVersion;
   if (currentWindow.label === "control") $("#window-close").title = config.close_behavior === "tray" ? "关闭到托盘" : "退出 Launcher";
 }
@@ -405,7 +402,6 @@ function readSettings(): LauncherConfig {
   return { ...config,
     close_behavior: ($<HTMLInputElement>("input[name=close_behavior]:checked")).value as "tray" | "exit",
     summon_shortcut: $("#setting-summon-shortcut").value.trim(),
-    hide_shell: $("#setting-hide-shell").checked,
     auto_start: $("#setting-auto-start").checked,
     stop_dsh_on_exit: $("#setting-stop-dsh").checked,
     download_directory: $("#setting-download-directory").value.trim(),
@@ -417,13 +413,13 @@ function readSettings(): LauncherConfig {
     notify_turn_failed: $("#setting-notify-turn-failed").checked,
     notify_job_completed: $("#setting-notify-job-completed").checked,
     notify_job_failed: $("#setting-notify-job-failed").checked,
+    notify_sound: $("#setting-notify-sound").value,
   };
 }
 async function saveSettings(): Promise<void> {
   try {
     config = await invoke<LauncherConfig>("save_config", { config: readSettings() });
     fillForm(config);
-    applyShellMode();
     $("#settings-save-result").textContent = "已保存";
     toast("设置已保存");
   } catch (error) { toast(String(error), true); }
@@ -1363,7 +1359,7 @@ async function init(): Promise<void> {
         if (kind === "turn-failed" && !config.notify_turn_failed) return;
         if (kind === "job-completed" && !config.notify_job_completed) return;
         if (kind === "job-failed" && !config.notify_job_failed) return;
-        if (payload.title) sendNotification({ title: payload.title, body: payload.body ?? "" });
+        if (payload.title) sendNotification({ title: payload.title, body: payload.body ?? "", sound: config.notify_sound || undefined });
       } catch { /* 非 JSON 事件体，忽略 */ }
     });
   } catch (error) {
@@ -1391,7 +1387,6 @@ async function init(): Promise<void> {
   addTab(initialTab ?? undefined);
   fillForm(config);
   fillSettings();
-  applyShellMode();
   renderStatus(loadedStatus);
   await revealWindow();
   // 更新检查暂时下线：手动推送发版；恢复时取消下一行注释即可。

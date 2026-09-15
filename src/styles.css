@@ -42,11 +42,6 @@ button:disabled { cursor: not-allowed; opacity: .45; }
   --text: var(--titlebar-text, #e8e8ea);
   --text-muted: var(--titlebar-muted, #9a9aa2);
 }
-/* 无外壳模式：整个顶栏隐藏，窗口只显示 dsh 内容。
-   顶部留一条 8px 隐形拖拽条：拖动窗口、双击最大化/还原（Tauri 拖拽区自带双击行为）。 */
-.shell-hidden .titlebar { display: none; }
-.shell-drag-strip { display: none; position: fixed; top: 0; left: 0; right: 0; height: 8px; z-index: 60; }
-.shell-hidden .shell-drag-strip { display: block; }
 .toolbar-left, .window-controls { height: 100%; display: flex; align-items: stretch; flex: none; }
 /* 安全模式横幅：融入暗色顶栏的低调提示条，13px 辅助灰，不做大字。 */
 .safe-mode-banner {

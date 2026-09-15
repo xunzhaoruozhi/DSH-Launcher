@@ -45,14 +45,15 @@ pub struct LauncherConfig {
     pub auto_check_updates: bool,
     /// 全局唤出快捷键（如 "Alt+Shift+D"）；空字符串表示禁用。
     pub summon_shortcut: String,
-    /// 无外壳模式：隐藏整个顶部栏，只显示 dsh 内容；功能从托盘菜单唤出。
-    pub hide_shell: bool,
     /// 桌面通知：dsh-launcher-notify 插件转发的事件在启动器侧按这些开关过滤。
     pub notify_enabled: bool,
     pub notify_turn_completed: bool,
     pub notify_turn_failed: bool,
     pub notify_job_completed: bool,
     pub notify_job_failed: bool,
+    /// 通知声音：空串 = 无声；否则为 Windows toast 内置音名
+    /// （Default/IM/Mail/Reminder/SMS/Alarm…/Call…）。
+    pub notify_sound: String,
     pub window_width: u32,
     pub window_height: u32,
 }
@@ -85,12 +86,12 @@ impl Default for LauncherConfig {
             download_choose_location: false,
             auto_check_updates: true,
             summon_shortcut: "Alt+Shift+D".into(),
-            hide_shell: false,
             notify_enabled: true,
             notify_turn_completed: true,
             notify_turn_failed: true,
             notify_job_completed: true,
             notify_job_failed: true,
+            notify_sound: "Default".into(),
             window_width: 880,
             window_height: 760,
         }
