@@ -16,6 +16,8 @@ mod download;
 mod dsh_files;
 #[cfg(target_os = "windows")]
 mod free_drag;
+#[cfg(target_os = "windows")]
+mod theme_sync;
 mod exec;
 mod market;
 mod plugins;
@@ -110,6 +112,9 @@ pub fn run() {
             // 无外壳模式的全局长按拖动：按住左键半秒即可拖动任意位置。
             #[cfg(target_os = "windows")]
             free_drag::start(app.handle().clone());
+            // 顶栏颜色跟随 dsh 页面主题（日间/夜间切换时同步变色）。
+            #[cfg(target_os = "windows")]
+            theme_sync::start(app.handle().clone());
             Ok(())
         })
         .on_window_event(|window, event| {

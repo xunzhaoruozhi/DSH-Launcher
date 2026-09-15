@@ -790,6 +790,42 @@ function syncAuthPrompt(): void {
   $("#auth-prompt").hidden = !authPromptNeeded() || authPromptClosed;
 }
 
+// —— 顶栏主题跟随 ——
+// 后端每 2 秒采样 dsh 页面在顶栏正下方的颜色推过来（dsh-theme 事件），这里把
+// 标题栏整套颜色变量重算一遍，日间/夜间切换时顶栏无缝跟随。弹窗开着时先不
+// 套用（遮罩会污染采样色），等弹窗关掉后由观察器补上最后一次采样结果。
+function mixColor(base: string, other: string, ratio: number): string {
+  const a = [1, 3, 5].map((i) => parseInt(base.slice(i, i + 2), 16));
+  const b = [1, 3, 5].map((i) => parseInt(other.slice(i, i + 2), 16));
+  const mixed = a.map((v, i) => Math.round(v * (1 - ratio) + b[i] * ratio));
+  return "#" + mixed.map((v) => v.toString(16).padStart(2, "0")).join("");
+}
+let pendingTitlebarTheme: string | null = null;
+function applyTitlebarTheme(hex: string): void {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  const dark = 0.299 * r + 0.587 * g + 0.114 * b < 128;
+  const text = dark ? "#e8e8ea" : "#333338";
+  const root = document.documentElement.style;
+  root.setProperty("--titlebar-bg", hex);
+  root.setProperty("--titlebar-text", text);
+  root.setProperty("--titlebar-muted", mixColor(text, hex, 0.4));
+  root.setProperty("--titlebar-hover", mixColor(hex, dark ? "#ffffff" : "#000000", 0.1));
+  root.setProperty("--titlebar-border", mixColor(hex, dark ? "#ffffff" : "#000000", 0.16));
+  root.setProperty("--titlebar-border-strong", mixColor(hex, dark ? "#ffffff" : "#000000", 0.24));
+}
+void listen("dsh-theme", (event) => {
+  const hex = String(event.payload);
+  pendingTitlebarTheme = hex;
+  if (document.querySelector(".modal:not([hidden])")) return;
+  applyTitlebarTheme(hex);
+});
+const modalThemeObserver = new MutationObserver(() => {
+  if (!document.querySelector(".modal:not([hidden])") && pendingTitlebarTheme) applyTitlebarTheme(pendingTitlebarTheme);
+});
+document.querySelectorAll<HTMLElement>(".modal").forEach((modal) => modalThemeObserver.observe(modal, { attributes: true, attributeFilter: ["hidden"] }));
+
 async function submitAuthUrl(): Promise<void> {
   const input = $("#auth-url");
   const value = input.value.trim();
