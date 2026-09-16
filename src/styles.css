@@ -210,6 +210,10 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
 .check-row strong { display: block; font-size: 12px; font-weight: 650; }
 .check-row small { display: block; margin-top: 4px; color: var(--text-muted); font-size: 10.5px; line-height: 15px; }
 .check-row.compact { border-bottom: 0; padding-bottom: 0; }
+/* 通知声音行：跟在对应分项开关下方，缩进对齐开关文字，视觉上从属于该开关。 */
+.notify-sound-row { margin: 8px 0 6px 24px; }
+.notify-sound-row label { color: var(--text-muted); font-size: 10.5px; }
+.notify-sound-row .path-input { flex: 1; }
 .about-section { padding-top: 17px; border-bottom: 0; }
 .about-copy { margin: 6px 0 12px; color: var(--text-muted); font-size: 11px; }
 .about-copy strong { color: var(--text); }

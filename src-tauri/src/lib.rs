@@ -80,7 +80,8 @@ pub fn run() {
             windows_ui::hide_tab_drag_preview,
             windows_ui::drop_tab,
             sounds::has_custom_notify_sound,
-            sounds::set_custom_notify_sound
+            sounds::set_custom_notify_sound,
+            sounds::play_notify_sound
         ])
         .setup(|app| {
             #[cfg(target_os = "macos")]
@@ -126,15 +127,18 @@ pub fn run() {
                         api.prevent_close();
                         let _ = window.hide();
                     } else {
-                        if config.stop_dsh_on_exit {
-                            let state = window.app_handle().state::<AppState>();
-                            let _ = stop_process(&window.app_handle(), state.inner());
-                        }
-                        // Let WebView2 finish its native window teardown before ending
-                        // the tray-backed event loop. Immediate app.exit() can race
-                        // Chromium's window-class cleanup (error 1412 on Windows).
+                        // 停止 dsh 可能等待进程树退出，必须和 app.exit 一起放到后台，
+                        // 不能堵在 Tauri 窗口事件线程里，否则 Alt+Tab 等系统窗口操作也会受影响。
                         let app = window.app_handle().clone();
+                        let state = app.state::<AppState>().inner().clone();
+                        let stop = config.stop_dsh_on_exit;
                         thread::spawn(move || {
+                            if stop {
+                                let _ = stop_process(&app, &state);
+                            }
+                            // Let WebView2 finish its native window teardown before ending
+                            // the tray-backed event loop. Immediate app.exit() can race
+                            // Chromium's window-class cleanup (error 1412 on Windows).
                             thread::sleep(Duration::from_millis(120));
                             app.exit(0);
                         });

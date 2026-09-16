@@ -43,6 +43,7 @@ fn main() {
                 "drop_tab",
                 "has_custom_notify_sound",
                 "set_custom_notify_sound",
+                "play_notify_sound",
             ]),
         ),
     )

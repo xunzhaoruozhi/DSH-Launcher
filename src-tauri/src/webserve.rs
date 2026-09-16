@@ -98,13 +98,28 @@ fn serve(app: &AppHandle, mut stream: TcpStream) -> std::io::Result<()> {
             .split_once("\r\n\r\n")
             .map(|(_, body)| body.to_string())
             .unwrap_or_default();
-        let _ = app.emit("launcher-notify", body);
+        let _ = app.emit("launcher-notify", &body);
         // 自定义音效（Cursor 风格 mp3）在启动器侧播放；系统内置音由前端传给 toast。
+        // 按通知类型选各自配置的声音，并尊重总开关与分项开关——
+        // 否则会出现「通知被关了、声音却照响」的不一致。
         #[cfg(target_os = "windows")]
         if let Ok(config) = crate::config::read_config(app) {
-            let sound = config.notify_sound;
-            if !sound.is_empty() && !crate::sounds::TOAST_SOUNDS.contains(&sound.as_str()) {
-                crate::sounds::play(app, &sound);
+            if config.notify_enabled {
+                let kind = serde_json::from_str::<serde_json::Value>(&body)
+                    .ok()
+                    .and_then(|value| value.get("kind").and_then(|k| k.as_str()).map(str::to_owned));
+                let sound = match kind.as_deref() {
+                    Some("turn-completed") if config.notify_turn_completed => Some(&config.notify_sound_turn_completed),
+                    Some("turn-failed") if config.notify_turn_failed => Some(&config.notify_sound_turn_failed),
+                    Some("job-completed") if config.notify_job_completed => Some(&config.notify_sound_job_completed),
+                    Some("job-failed") if config.notify_job_failed => Some(&config.notify_sound_job_failed),
+                    _ => None,
+                };
+                if let Some(sound) = sound {
+                    if !sound.is_empty() && !crate::sounds::TOAST_SOUNDS.contains(&sound.as_str()) {
+                        crate::sounds::play(app, sound);
+                    }
+                }
             }
         }
         stream.write_all(

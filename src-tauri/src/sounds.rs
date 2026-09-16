@@ -92,6 +92,12 @@ pub fn has_custom_notify_sound(app: AppHandle) -> bool {
     custom_file(&app).is_some()
 }
 
+/// 试听一个声音（设置页的播放按钮）：内置音名或 "custom"。
+#[tauri::command]
+pub fn play_notify_sound(app: AppHandle, name: String) {
+    play(&app, &name);
+}
+
 /// 把用户选择的声音文件复制进配置目录，作为「自定义」通知音。
 #[tauri::command]
 pub fn set_custom_notify_sound(app: AppHandle, path: String) -> Result<bool, String> {

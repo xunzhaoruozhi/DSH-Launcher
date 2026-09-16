@@ -57,15 +57,17 @@ pub fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
             });
         }
         "quit" => {
-            let config = read_config(app).unwrap_or_default();
-            if config.stop_dsh_on_exit {
-                let state = app.state::<AppState>();
-                let _ = stop_process(app, state.inner());
-            }
-            let app = app.clone();
+            // 停止 dsh 可能要等待 Windows 进程树退出，绝不能在托盘事件线程同步做，
+            // 否则会把 Launcher 的窗口消息循环一起卡住，表现为 Alt+Tab 失灵。
+            let app_handle = app.clone();
+            let state = app.state::<AppState>().inner().clone();
+            let stop = read_config(app).unwrap_or_default().stop_dsh_on_exit;
             thread::spawn(move || {
+                if stop {
+                    let _ = stop_process(&app_handle, &state);
+                }
                 thread::sleep(Duration::from_millis(120));
-                app.exit(0);
+                app_handle.exit(0);
             });
         }
         _ => {}

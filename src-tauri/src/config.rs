@@ -51,9 +51,13 @@ pub struct LauncherConfig {
     pub notify_turn_failed: bool,
     pub notify_job_completed: bool,
     pub notify_job_failed: bool,
-    /// 通知声音：空串 = 无声；否则为 Windows toast 内置音名
-    /// （Default/IM/Mail/Reminder/SMS/Alarm…/Call…）。
-    pub notify_sound: String,
+    /// 每类通知各自的声音：空串 = 无声；Windows toast 内置音名
+    /// （Default/IM/Mail/Reminder/SMS/Alarm…/Call…）由 toast 自己发声；
+    /// 其余（内置 mp3 名或 "custom"）由启动器后端播放。
+    pub notify_sound_turn_completed: String,
+    pub notify_sound_turn_failed: String,
+    pub notify_sound_job_completed: String,
+    pub notify_sound_job_failed: String,
     pub window_width: u32,
     pub window_height: u32,
 }
@@ -91,7 +95,10 @@ impl Default for LauncherConfig {
             notify_turn_failed: true,
             notify_job_completed: true,
             notify_job_failed: true,
-            notify_sound: "Default".into(),
+            notify_sound_turn_completed: "Default".into(),
+            notify_sound_turn_failed: "Default".into(),
+            notify_sound_job_completed: "Default".into(),
+            notify_sound_job_failed: "Default".into(),
             window_width: 880,
             window_height: 760,
         }
