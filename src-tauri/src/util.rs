@@ -117,10 +117,17 @@ pub fn open_external_url(url: &str) -> Result<(), String> {
     }
     #[cfg(windows)]
     {
-        let mut command = Command::new("explorer.exe");
+        // explorer.exe 对 URL 的处理依赖当前 Shell 关联，某些链接会被当成
+        // 文件夹路径打开。用 Windows 的 start 命令交给默认浏览器更稳定。
+        if url.contains('"') || url.chars().any(char::is_control) {
+            return Err("链接包含非法字符".into());
+        }
+        let command_line = format!("start \"\" \"{url}\"");
+        let mut command = Command::new("cmd.exe");
         crate::exec::hide_console(&mut command);
         command
-            .arg(url)
+            .args(["/D", "/S", "/C"])
+            .arg(command_line)
             .spawn()
             .map_err(|error| error.to_string())?;
     }
