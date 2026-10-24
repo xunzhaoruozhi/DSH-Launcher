@@ -87,6 +87,10 @@ interface TabState {
   title: string;
   frame: HTMLIFrameElement | null;
   loadedUrl: string;
+  /** 当前 iframe 内容已装载完成（load 已过），可以放心展示。 */
+  frameReady: boolean;
+  /** 已消费的带令牌地址：它的页面还在正常跑，状态事件再带来同一令牌地址时不重载。 */
+  authConsumedFor: string | null;
   stale: boolean;
 }
 
@@ -477,7 +481,10 @@ function frameUrl(raw: string): string {
 
 function syncFrames(): void {
   const ready = status.phase === "ready";
-  $("#workspace-state").hidden = ready;
+  // 占位层在服务未就绪、或页面尚未装载完成（首次装载/重载期间）时都保持可见，
+  // 否则会露出宿主页面的亮色底，看起来像一段莫名的白屏。
+  const active = tabs.find((tab) => tab.id === activeTab);
+  $("#workspace-state").hidden = Boolean(ready && active?.frame && active.frameReady);
   // dsh 自 0.1.2 起给 Web 加了浏览器认证：内嵌页面必须先用启动时打印的带令牌
   // 地址换一次 cookie，裸地址一律 401。没有令牌地址（老版本，或已经换过 cookie）
   // 时沿用干净地址。
@@ -494,7 +501,10 @@ function syncFrames(): void {
         // 首次 load 完成后才揭晓（后续 src 重载复用同一监听）。
         frame.hidden = true;
         frame.addEventListener("load", () => {
+          tab.frameReady = true;
           if (tab.id === activeTab) frame.hidden = false;
+          // 页面可展示了，这一刻才收起占位层。
+          syncFrames();
           consumeAuthUrl(tab);
         });
         tab.frame = frame;
@@ -502,12 +512,17 @@ function syncFrames(): void {
       // 只在地址变化或被标记过期时装载。iframe.src 的 getter 会把地址规范化
       // （补上尾部斜杠），与目标地址直接比较永远不相等，因此自己记录
       // loadedUrl，避免每条状态事件（包括日志推送）都触发一次 WebUI 重载。
-      if (tab.loadedUrl !== target || tab.stale) {
+      // 例外：刚用令牌地址换完 cookie、令牌地址还在状态事件里 lingering 的
+      // 窗口期，令牌页面本身还活着，不该再重载一次（那会白屏并丢掉页面状态）。
+      const consumedAuth = !tab.stale && tab.authConsumedFor !== null && tab.authConsumedFor === target;
+      if ((tab.loadedUrl !== target && !consumedAuth) || tab.stale) {
         // 重载期间先隐藏、load 后揭晓，避免空白闪烁。
+        tab.frameReady = false;
         tab.frame.hidden = true;
         tab.frame.src = target;
         tab.loadedUrl = target;
         tab.stale = false;
+        tab.authConsumedFor = null;
       } else {
         // 已加载完成的标签直接显示（切换回来不应闪屏）。
         tab.frame.hidden = false;
@@ -520,17 +535,19 @@ function syncFrames(): void {
 }
 
 // 带令牌的地址用完即弃：cookie 已经落进 WebView，那个一次性令牌在 dsh 下次
-// 重启后必然失效。这里把标签记录的地址同步改回干净地址，避免立刻重载一次。
+// 重启后必然失效。这里把标签记录的地址同步改回干净地址，避免立刻重载一次；
+// 同时记下消费过的令牌地址，让 syncFrames 在它还 lingering 时别手痒重载。
 function consumeAuthUrl(tab: TabState): void {
   const used = status.web_url;
   if (!used || tab.loadedUrl !== frameUrl(used)) return;
+  tab.authConsumedFor = tab.loadedUrl;
   tab.loadedUrl = frameUrl(status.url);
   void invoke<LauncherStatus>("auth_url_consumed").then(renderStatus).catch(() => undefined);
 }
 
 function addTab(title?: string): void {
   const id = ++tabSequence;
-  tabs.push({ id, title: title?.trim() || `DSH ${++tabNameSequence}`, frame: null, loadedUrl: "", stale: false });
+  tabs.push({ id, title: title?.trim() || `DSH ${++tabNameSequence}`, frame: null, loadedUrl: "", frameReady: false, authConsumedFor: null, stale: false });
   activateTab(id);
 }
 
@@ -741,7 +758,7 @@ function renderStatus(next: LauncherStatus): void {
   $("#service-state").textContent = next.phase === "ready" ? (next.external ? "运行中（外部）" : "运行中") : maintenance ? "维护中" : next.phase === "starting" ? "启动中" : next.phase === "failed" ? "启动失败" : "已停止";
   const state = $("#workspace-state");
   state.dataset.phase = next.phase;
-  $("#workspace-title").textContent = maintenance ? (next.busy ?? "操作进行中") : next.phase === "failed" ? "dsh 启动失败" : next.phase === "starting" ? "正在启动 dsh" : "dsh 尚未运行";
+  $("#workspace-title").textContent = maintenance ? (next.busy ?? "操作进行中") : next.phase === "failed" ? "dsh 启动失败" : next.phase === "starting" ? "正在启动 dsh" : next.phase === "ready" ? "正在打开 WebUI" : "dsh 尚未运行";
   $("#workspace-message").textContent = maintenance ? "操作完成后会自动恢复服务，请稍候。" : next.message;
   // 安全模式横幅与错误界面的安全模式入口。body 上的类让工作区高度同步
   // 扣掉横幅的 30px，否则内容被整体挤出屏幕、底部按钮被裁掉。
