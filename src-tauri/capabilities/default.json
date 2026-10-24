@@ -21,7 +21,6 @@
     "core:window:allow-set-focus",
     "dialog:allow-open",
     "dialog:allow-ask",
-    "notification:default",
     "allow-load-config",
     "allow-default-config",
     "allow-save-config",
@@ -56,9 +55,6 @@
     "allow-show-tab-drag-preview",
     "allow-move-tab-drag-preview",
     "allow-hide-tab-drag-preview",
-    "allow-drop-tab",
-    "allow-has-custom-notify-sound",
-    "allow-set-custom-notify-sound",
-    "allow-play-notify-sound"
+    "allow-drop-tab"
   ]
 }

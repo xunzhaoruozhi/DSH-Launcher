@@ -45,19 +45,6 @@ pub struct LauncherConfig {
     pub auto_check_updates: bool,
     /// 全局唤出快捷键（如 "Alt+Shift+D"）；空字符串表示禁用。
     pub summon_shortcut: String,
-    /// 桌面通知：dsh-launcher-notify 插件转发的事件在启动器侧按这些开关过滤。
-    pub notify_enabled: bool,
-    pub notify_turn_completed: bool,
-    pub notify_turn_failed: bool,
-    pub notify_job_completed: bool,
-    pub notify_job_failed: bool,
-    /// 每类通知各自的声音：空串 = 无声；Windows toast 内置音名
-    /// （Default/IM/Mail/Reminder/SMS/Alarm…/Call…）由 toast 自己发声；
-    /// 其余（内置 mp3 名或 "custom"）由启动器后端播放。
-    pub notify_sound_turn_completed: String,
-    pub notify_sound_turn_failed: String,
-    pub notify_sound_job_completed: String,
-    pub notify_sound_job_failed: String,
     pub window_width: u32,
     pub window_height: u32,
 }
@@ -90,15 +77,6 @@ impl Default for LauncherConfig {
             download_choose_location: false,
             auto_check_updates: true,
             summon_shortcut: "Alt+Shift+D".into(),
-            notify_enabled: true,
-            notify_turn_completed: true,
-            notify_turn_failed: true,
-            notify_job_completed: true,
-            notify_job_failed: true,
-            notify_sound_turn_completed: "Default".into(),
-            notify_sound_turn_failed: "Default".into(),
-            notify_sound_job_completed: "Default".into(),
-            notify_sound_job_failed: "Default".into(),
             window_width: 880,
             window_height: 760,
         }

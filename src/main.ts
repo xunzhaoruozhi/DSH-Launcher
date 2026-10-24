@@ -2,7 +2,6 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { ask, open } from "@tauri-apps/plugin-dialog";
-import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 import whaleIconUrl from "../assets/dsh-icon-source.png";
 import {
   CircleAlert,
@@ -31,7 +30,6 @@ import {
   Square,
   TerminalSquare,
   Trash2,
-  Volume2,
   Wrench,
   X,
   createIcons,
@@ -59,15 +57,6 @@ interface LauncherConfig {
   download_ask: boolean;
   download_choose_location: boolean;
   auto_check_updates: boolean;
-  notify_enabled: boolean;
-  notify_turn_completed: boolean;
-  notify_turn_failed: boolean;
-  notify_job_completed: boolean;
-  notify_job_failed: boolean;
-  notify_sound_turn_completed: string;
-  notify_sound_turn_failed: string;
-  notify_sound_job_completed: string;
-  notify_sound_job_failed: string;
   window_width: number;
   window_height: number;
 }
@@ -265,18 +254,6 @@ app.innerHTML = `
             <div class="field full"><label for="setting-summon-shortcut">全局唤出快捷键</label><div class="input-with-hint"><input id="setting-summon-shortcut" autocomplete="off" spellcheck="false" placeholder="例如 Alt+Shift+D"><small class="field-hint">任意程序里按下即唤出/收起主窗口，留空则禁用</small></div></div></div>
           <label class="check-row"><input id="setting-auto-start" type="checkbox"><span><strong>启动后自动启动 dsh Web 服务</strong><small>Launcher 打开后立即启动本地服务</small></span></label>
           <label class="check-row"><input id="setting-stop-dsh" type="checkbox"><span><strong>退出 Launcher 时结束 dsh</strong><small>只结束由当前 Launcher 启动并登记的进程树</small></span></label>
-          <div class="settings-section"><p class="eyebrow">NOTIFY</p><h3>桌面通知</h3>
-            <label class="check-row"><input id="setting-notify-enabled" type="checkbox"><span><strong>启用桌面通知</strong><small>你发起的回合与后台任务结束时弹系统通知</small></span></label>
-            <label class="check-row compact"><input id="setting-notify-turn-completed" type="checkbox"><span><strong>回合完成时通知</strong><small>你发起的回合正常结束</small></span></label>
-            <div class="field notify-sound-row"><label for="setting-notify-sound-turn-completed">声音</label><div class="path-input"><select id="setting-notify-sound-turn-completed"></select><button type="button" class="icon-button notify-preview" data-sound-select="setting-notify-sound-turn-completed" title="试听这个声音"><i data-lucide="volume-2"></i></button></div></div>
-            <label class="check-row compact"><input id="setting-notify-turn-failed" type="checkbox"><span><strong>回合失败时通知</strong><small>回合出错或达到长度上限</small></span></label>
-            <div class="field notify-sound-row"><label for="setting-notify-sound-turn-failed">声音</label><div class="path-input"><select id="setting-notify-sound-turn-failed"></select><button type="button" class="icon-button notify-preview" data-sound-select="setting-notify-sound-turn-failed" title="试听这个声音"><i data-lucide="volume-2"></i></button></div></div>
-            <label class="check-row compact"><input id="setting-notify-job-completed" type="checkbox"><span><strong>后台任务完成时通知</strong><small>后台任务正常结束</small></span></label>
-            <div class="field notify-sound-row"><label for="setting-notify-sound-job-completed">声音</label><div class="path-input"><select id="setting-notify-sound-job-completed"></select><button type="button" class="icon-button notify-preview" data-sound-select="setting-notify-sound-job-completed" title="试听这个声音"><i data-lucide="volume-2"></i></button></div></div>
-            <label class="check-row compact"><input id="setting-notify-job-failed" type="checkbox"><span><strong>后台任务失败时通知</strong><small>后台任务出错</small></span></label>
-            <div class="field notify-sound-row"><label for="setting-notify-sound-job-failed">声音</label><div class="path-input"><select id="setting-notify-sound-job-failed"></select><button type="button" class="icon-button notify-preview" data-sound-select="setting-notify-sound-job-failed" title="试听这个声音"><i data-lucide="volume-2"></i></button></div></div>
-            <div class="field full"><label for="browse-notify-sound">自选声音文件</label><div class="path-input"><button id="browse-notify-sound" type="button" class="button quiet"><i data-lucide="file-audio"></i><span>选择文件（mp3 / wav）</span></button><small class="field-hint">选过之后，各通知的「自选文件…」选项就会播放它</small></div></div>
-          </div>
           <div class="settings-section download-section"><p class="eyebrow">DOWNLOAD</p><h3>下载</h3>
             <div class="field full"><label for="setting-download-directory">默认下载目录</label><div class="path-input"><input id="setting-download-directory" autocomplete="off" spellcheck="false"><button id="browse-download-directory" type="button" class="icon-button" title="选择下载目录"><i data-lucide="folder-open"></i></button></div></div>
             <label class="check-row"><input id="setting-download-ask" type="checkbox"><span><strong>下载前确认</strong><small>每次下载前弹出确认提示</small></span></label>
@@ -307,7 +284,7 @@ app.innerHTML = `
 // 因此 Windows 永远不加该类、布局与作者原始版本完全一致。
 if (/Mac/i.test(navigator.userAgent)) document.body.classList.add("os-macos");
 
-createIcons({ icons: { CircleAlert, CircleCheck, Code2, Download, ExternalLink, Eye, FileCog, FileText, FolderOpen, Github, Link, LoaderCircle, Minus, PackageCheck, Plus, Puzzle, RefreshCw, RotateCcw, Save, Search, Settings, Shield, SlidersHorizontal, Square, TerminalSquare, Trash2, Volume2, Wrench, X } });
+createIcons({ icons: { CircleAlert, CircleCheck, Code2, Download, ExternalLink, Eye, FileCog, FileText, FolderOpen, Github, Link, LoaderCircle, Minus, PackageCheck, Plus, Puzzle, RefreshCw, RotateCcw, Save, Search, Settings, Shield, SlidersHorizontal, Square, TerminalSquare, Trash2, Wrench, X } });
 const $ = <T extends HTMLElement = HTMLInputElement>(selector: string): T => document.querySelector<T>(selector)!;
 const currentWindow = getCurrentWindow();
 let config: LauncherConfig;
@@ -388,45 +365,6 @@ function fillForm(value: LauncherConfig): void {
   $("#port").value = String(value.port);
   updateModeFields();
 }
-// —— 通知声音下拉 ——
-// 四类通知各自一个下拉，选项一致；系统音由 toast 发声，其余由后端播放。
-const NOTIFY_SOUND_SELECTS = [
-  { id: "setting-notify-sound-turn-completed", key: "notify_sound_turn_completed" as const },
-  { id: "setting-notify-sound-turn-failed", key: "notify_sound_turn_failed" as const },
-  { id: "setting-notify-sound-job-completed", key: "notify_sound_job_completed" as const },
-  { id: "setting-notify-sound-job-failed", key: "notify_sound_job_failed" as const },
-];
-const NOTIFY_SOUND_OPTIONS = `
-  <option value="">无声</option>
-  <optgroup label="系统音">
-    <option value="Default">系统默认</option><option value="IM">即时消息</option><option value="Mail">邮件</option>
-    <option value="Reminder">提醒</option><option value="SMS">短信</option><option value="Alarm">闹钟</option>
-    <option value="Alarm2">闹钟 2</option><option value="Call">来电</option>
-  </optgroup>
-  <optgroup label="内置音效">
-    <option value="taskCompleted">任务完成</option><option value="taskFailed">任务失败</option><option value="success">成功</option>
-    <option value="error">错误</option><option value="warning">警告</option><option value="terminalBell">响铃</option>
-  </optgroup>
-  <optgroup label="自定义"><option value="custom">自选文件…</option></optgroup>`;
-const TOAST_SOUND_NAMES = new Set(["Default", "IM", "Mail", "Reminder", "SMS", "Alarm", "Alarm2", "Call"]);
-
-function fillNotifySoundSelects(): void {
-  for (const { id } of NOTIFY_SOUND_SELECTS) {
-    const select = $<HTMLSelectElement>(`#${id}`);
-    if (!select.options.length) select.innerHTML = NOTIFY_SOUND_OPTIONS;
-  }
-}
-
-function previewNotifySound(selectId: string): void {
-  const value = $<HTMLSelectElement>(`#${selectId}`).value;
-  if (!value) { toast("这条通知设为无声"); return; }
-  if (TOAST_SOUND_NAMES.has(value)) {
-    // 系统音只能由 toast 自己发声：弹一条真通知，听到的就是实际效果。
-    sendNotification({ title: "声音试听", body: "这就是这条通知的声音。", sound: value });
-  } else {
-    void invoke("play_notify_sound", { name: value }).catch(() => toast("播放失败：还没有选择自选文件", true));
-  }
-}
 
 function fillSettings(): void {
   $<HTMLInputElement>(`input[name="close_behavior"][value="${config.close_behavior}"]`).checked = true;
@@ -437,13 +375,6 @@ function fillSettings(): void {
   $("#setting-download-ask").checked = config.download_ask;
   $("#setting-download-choose").checked = config.download_choose_location;
   $("#setting-auto-check-updates").checked = config.auto_check_updates;
-  $("#setting-notify-enabled").checked = config.notify_enabled;
-  $("#setting-notify-turn-completed").checked = config.notify_turn_completed;
-  $("#setting-notify-turn-failed").checked = config.notify_turn_failed;
-  $("#setting-notify-job-completed").checked = config.notify_job_completed;
-  $("#setting-notify-job-failed").checked = config.notify_job_failed;
-  fillNotifySoundSelects();
-  for (const { id, key } of NOTIFY_SOUND_SELECTS) $<HTMLSelectElement>(`#${id}`).value = config[key];
   $("#launcher-version").textContent = launcherVersion;
   if (currentWindow.label === "control") $("#window-close").title = config.close_behavior === "tray" ? "关闭到托盘" : "退出 Launcher";
 }
@@ -457,15 +388,6 @@ function readSettings(): LauncherConfig {
     download_ask: $("#setting-download-ask").checked,
     download_choose_location: $("#setting-download-choose").checked,
     auto_check_updates: $("#setting-auto-check-updates").checked,
-    notify_enabled: $("#setting-notify-enabled").checked,
-    notify_turn_completed: $("#setting-notify-turn-completed").checked,
-    notify_turn_failed: $("#setting-notify-turn-failed").checked,
-    notify_job_completed: $("#setting-notify-job-completed").checked,
-    notify_job_failed: $("#setting-notify-job-failed").checked,
-    notify_sound_turn_completed: $("#setting-notify-sound-turn-completed").value,
-    notify_sound_turn_failed: $("#setting-notify-sound-turn-failed").value,
-    notify_sound_job_completed: $("#setting-notify-sound-job-completed").value,
-    notify_sound_job_failed: $("#setting-notify-sound-job-failed").value,
   };
 }
 async function saveSettings(): Promise<void> {
@@ -1348,19 +1270,6 @@ document.addEventListener("click", (event) => {
 });
 $("#browse-workspace").addEventListener("click", async () => { const selected = await open({ directory: true, multiple: false, defaultPath: $("#working-directory").value || undefined }); if (typeof selected === "string") $("#working-directory").value = selected; });
 $("#browse-download-directory").addEventListener("click", async () => { const selected = await open({ directory: true, multiple: false, defaultPath: $("#setting-download-directory").value || undefined }); if (typeof selected === "string") $("#setting-download-directory").value = selected; });
-  $("#browse-notify-sound").addEventListener("click", async () => {
-    const selected = await open({ multiple: false, filters: [{ name: "音频文件", extensions: ["mp3", "wav"] }] });
-    if (typeof selected !== "string") return;
-    try {
-      await invoke("set_custom_notify_sound", { path: selected });
-      await saveSettings();
-      toast("自选声音已保存，可在各通知的「自选文件…」选项中使用");
-    } catch (error) { toast(String(error), true); }
-  });
-// 试听按钮：系统音弹真 toast（那就是实际效果），其余走后端播放。
-for (const button of document.querySelectorAll<HTMLButtonElement>(".notify-preview")) {
-  button.addEventListener("click", () => previewNotifySound(button.dataset.soundSelect ?? ""));
-}
 $("#refresh-web").addEventListener("click", refreshWeb);
 $("#tab-add").addEventListener("click", () => addTab());
 // 标签多到放不下时用滚轮横向滚动标签条。
@@ -1407,40 +1316,6 @@ async function init(): Promise<void> {
   // 托盘菜单唤出的功能：打开对应面板 / 刷新页面（只在主窗口处理）。
   await listen<string>("open-dialog", (event) => { if (currentWindow.label === "control") showDialog(event.payload as DialogId); });
   await listen("refresh-web", () => { if (currentWindow.label === "control") refreshWeb(); });
-  // —— 桌面通知 ——
-  // dsh-launcher-notify 插件把回合/任务结束事件 POST 给 webserve 的
-  // /launcher/notify，后端原样转发到这里，由通知插件弹系统 toast。
-  // 启动器不在场时插件自己保持安静，所以这里收到即弹、无需再判断。
-  try {
-    let granted = await isPermissionGranted();
-    if (!granted) granted = (await requestPermission()) === "granted";
-    if (!granted) return;
-    await listen<string>("launcher-notify", (event) => {
-      try {
-        const payload = JSON.parse(event.payload) as { kind?: string; title?: string; body?: string };
-        if (!config.notify_enabled) return;
-        const kind = payload.kind ?? "";
-        if (kind === "turn-completed" && !config.notify_turn_completed) return;
-        if (kind === "turn-failed" && !config.notify_turn_failed) return;
-        if (kind === "job-completed" && !config.notify_job_completed) return;
-        if (kind === "job-failed" && !config.notify_job_failed) return;
-        if (payload.title) {
-          // 系统内置音由 toast 自己发声；内置音效/自选文件由启动器后端播放，toast 保持静音。
-          const soundByKey: Record<string, string> = {
-            "turn-completed": config.notify_sound_turn_completed,
-            "turn-failed": config.notify_sound_turn_failed,
-            "job-completed": config.notify_sound_job_completed,
-            "job-failed": config.notify_sound_job_failed,
-          };
-          const soundName = soundByKey[kind] ?? "";
-          const sound = TOAST_SOUND_NAMES.has(soundName) ? soundName : undefined;
-          sendNotification({ title: payload.title, body: payload.body ?? "", sound });
-        }
-      } catch { /* 非 JSON 事件体，忽略 */ }
-    });
-  } catch (error) {
-    console.warn("桌面通知不可用：", error);
-  }
   const [loadedConfig, loadedStatus, version, initialTab] = await Promise.all([
     invoke<LauncherConfig>("load_config"),
     invoke<LauncherStatus>("get_status"),

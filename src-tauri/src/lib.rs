@@ -14,7 +14,6 @@
 mod config;
 mod download;
 mod dsh_files;
-mod sounds;
 #[cfg(target_os = "windows")]
 mod theme_sync;
 mod exec;
@@ -41,7 +40,6 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .plugin(tauri_plugin_notification::init())
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             config::load_config,
@@ -78,10 +76,7 @@ pub fn run() {
             windows_ui::show_tab_drag_preview,
             windows_ui::move_tab_drag_preview,
             windows_ui::hide_tab_drag_preview,
-            windows_ui::drop_tab,
-            sounds::has_custom_notify_sound,
-            sounds::set_custom_notify_sound,
-            sounds::play_notify_sound
+            windows_ui::drop_tab
         ])
         .setup(|app| {
             #[cfg(target_os = "macos")]
