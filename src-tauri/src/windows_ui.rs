@@ -135,11 +135,15 @@ pub fn spawn_launcher_window_named(
     // Use the app URL so Tauri resolves the dev server in development and
     // the bundled frontend in production. External URLs do not reliably get
     // the launcher initialization scripts and window APIs.
-    let (width, height) = size.unwrap_or((880.0, 760.0));
+    let (width, height) = size.unwrap_or((1100.0, 760.0));
+    // dsh WebUI 的移动端断点是 1023px：窗口比它窄会进移动布局，之后窗口一旦
+    // 变宽，已渲染的移动端元素（如 data-mobile-nav 复制按钮）会失去样式变成
+    // 裸按钮，dsh 不会回收。最小宽度压过断点，让内嵌页面始终走桌面布局。
+    let width = width.max(1024.0);
     let mut builder = WebviewWindowBuilder::new(app, &label, launcher_url(app)?)
         .title("DSH Launcher")
         .inner_size(width, height)
-        .min_inner_size(620.0, 560.0)
+        .min_inner_size(1024.0, 560.0)
         .resizable(true)
         .visible(false);
     // macOS：启用原生装饰 + 叠加标题栏，露出标准红黄绿按钮（左侧）。
@@ -387,7 +391,7 @@ pub async fn drop_tab(
     let size = window.inner_size().ok().map(|inner| {
         let scale = window.scale_factor().unwrap_or(1.0);
         (
-            (inner.width as f64 / scale).max(620.0),
+            (inner.width as f64 / scale).max(1024.0),
             (inner.height as f64 / scale).max(560.0),
         )
     });

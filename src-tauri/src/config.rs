@@ -77,7 +77,7 @@ impl Default for LauncherConfig {
             download_choose_location: false,
             auto_check_updates: true,
             summon_shortcut: "Alt+Shift+D".into(),
-            window_width: 880,
+            window_width: 1100,
             window_height: 760,
         }
     }
@@ -184,7 +184,7 @@ pub fn save_config(app: AppHandle, config: LauncherConfig) -> Result<LauncherCon
 pub fn save_window_size(app: AppHandle, width: u32, height: u32) -> Result<(), String> {
     // Keep persisted dimensions within the same practical limits as the window
     // definition, and avoid writing transient zero-sized resize events.
-    if !(620..=4096).contains(&width) || !(560..=4096).contains(&height) {
+    if !(1024..=4096).contains(&width) || !(560..=4096).contains(&height) {
         return Ok(());
     }
     let mut config = read_config(&app)?;

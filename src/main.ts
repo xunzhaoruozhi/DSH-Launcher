@@ -1342,7 +1342,9 @@ async function init(): Promise<void> {
   config = loadedConfig;
   launcherVersion = version;
   if (currentWindow.label === "control") {
-    const width = Math.max(620, Math.min(4096, config.window_width || 880));
+    // 下限 1024：dsh WebUI 在更窄的视口会切到移动端布局，窗口变宽后已渲染的
+    // 移动端元素会以裸样式残留（见 windows_ui.rs 同款注释）。
+    const width = Math.max(1024, Math.min(4096, config.window_width || 1100));
     const height = Math.max(560, Math.min(4096, config.window_height || 760));
     await currentWindow.setSize(new LogicalSize(width, height));
     await currentWindow.onResized(async ({ payload }) => {
