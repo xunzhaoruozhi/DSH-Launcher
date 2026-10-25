@@ -284,6 +284,7 @@ pub fn spawn_launcher_window_named(
         None => builder.center(),
     };
     let download_app = app.clone();
+    let new_window_app = download_app.clone();
     let window = builder
         // Install the click bridge in the dsh iframe as well as the launcher page.
         .initialization_script_for_all_frames(EXTERNAL_LINK_BRIDGE)
@@ -291,6 +292,15 @@ pub fn spawn_launcher_window_named(
         // 对 target=_blank/window.open，直接交给系统浏览器，避免在壳子里生成
         // 一个没有认证上下文的新窗口。
         .on_new_window(move |url, _features| {
+            // 本机地址绝不能丢给外部浏览器：启动器自己的静态页面端口每次
+            // 重启都会变，开发端口也会停——外抛出去的 Edge 标签页过后就
+            // 变成「localhost 拒绝连接」的僵尸页。点击链接的桥接脚本已
+            // 排除回环地址，这里补上新窗口路径的同样守卫。
+            let is_loopback = matches!(url.host_str(), Some("localhost") | Some("127.0.0.1") | Some("[::1]"));
+            if is_loopback {
+                crate::watchdog::append_log(&new_window_app, &format!("已拒绝外部打开本机地址: {url}"));
+                return tauri::webview::NewWindowResponse::Deny;
+            }
             if url.scheme() == "http" || url.scheme() == "https" {
                 let _ = open_external_url(url.as_str());
             }
