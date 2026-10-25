@@ -31,6 +31,9 @@ mod watchdog;
 mod webserve;
 mod windows_ui;
 
+#[cfg(windows)]
+pub use watchdog::consume_restart_marker;
+
 use std::{thread, time::Duration};
 use tauri::Manager;
 

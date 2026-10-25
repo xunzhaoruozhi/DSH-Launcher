@@ -202,12 +202,31 @@ pub fn start(app: AppHandle) {
                 // 杀进程。重启前的转储和日志已经落盘，事后仍可排查。
                 if let Some(started) = hang_started {
                     if started.elapsed() >= Duration::from_secs(90) {
-                        append_log(&app, "主线程卡死超过 90 秒，自动重启启动器");
-                        let app_handle = app.clone();
-                        let _ = std::process::Command::new(std::env::current_exe()
-                            .unwrap_or_else(|_| "dsh-launcher.exe".into()))
-                            .spawn();
-                        app_handle.exit(0);
+                        // 主线程已死，app.exit(0) 的退出任务永远进不了消息
+                        // 循环；单实例锁又会把新进程挡在外面。所以这里：
+                        // 1) 写下自愈标记（新进程读到后强杀旧 PID）；
+                        // 2) 直接 TerminateProcess 结束自己——不留死窗口。
+                        append_log(&app, "主线程卡死超过 90 秒，自动强杀并重启启动器");
+                        if let Some(path) = log_path(&app) {
+                            let marker = path.with_file_name("restart-pending");
+                            let _ = fs::write(&marker, std::process::id().to_string());
+                        }
+                        let exe = std::env::current_exe()
+                            .unwrap_or_else(|_| "dsh-launcher.exe".into());
+                        let _ = std::process::Command::new(exe).spawn();
+                        #[cfg(windows)]
+                        {
+                            use windows_sys::Win32::System::Threading::{
+                                GetCurrentProcess, TerminateProcess,
+                            };
+                            unsafe {
+                                TerminateProcess(GetCurrentProcess(), 0);
+                            }
+                        }
+                        #[cfg(not(windows))]
+                        {
+                            std::process::exit(0);
+                        }
                     }
                 }
             }
@@ -320,6 +339,40 @@ pub fn start(app: AppHandle) {
         }
     });
 }
+
+/// 自愈交接：看门狗硬退前写下的 restart-pending 标记里是旧（卡死）进程的
+/// PID。新进程启动时看到它就结束旧进程、删标记。必须发生在单实例插件
+/// 初始化之前——否则新进程会被旧实例的锁挡住，又变回“死窗口永远在”。
+#[cfg(windows)]
+pub fn consume_restart_marker() {
+    let Some(dir) = dirs::config_dir().map(|d| d.join("ai.deepseek.dsh-launcher")) else {
+        return;
+    };
+    let marker = dir.join("restart-pending");
+    let Ok(content) = fs::read_to_string(&marker) else {
+        return;
+    };
+    let _ = fs::remove_file(&marker);
+    let Ok(pid) = content.trim().parse::<u32>() else {
+        return;
+    };
+    if pid == std::process::id() {
+        return;
+    }
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, PROCESS_TERMINATE,
+    };
+    unsafe {
+        let handle = OpenProcess(PROCESS_TERMINATE, 0, pid);
+        if !handle.is_null() {
+            let _ = windows_sys::Win32::System::Threading::TerminateProcess(handle, 0);
+            let _ = windows_sys::Win32::Foundation::CloseHandle(handle);
+        }
+    }
+}
+
+#[cfg(not(windows))]
+pub fn consume_restart_marker() {}
 
 fn report(
     app: &AppHandle,

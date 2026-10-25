@@ -37,3 +37,8 @@ sysinfo = { version = "0.33", default-features = false, features = ["system"] }
 # 只有 macOS 用它做标题栏的原生振动模糊，别让 Windows/Linux 白编译一遍。
 [target.'cfg(target_os = "macos")'.dependencies]
 window-vibrancy = "0.5"
+
+# 保留符号信息（PDB）：主线程卡死时看门狗写的 minidump 需要它才能把
+# 偏移还原成函数名，否则转储只有一堆地址，排障等于抓瞎。
+[profile.release]
+debug = "line-tables-only"
