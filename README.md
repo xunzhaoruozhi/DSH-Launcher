@@ -105,6 +105,18 @@ npm run tauri build
 
 ## WebView 看门狗（卡死排查）
 
+## WebView 挂起（后台不渲染）
+
+窗口最小化或藏到托盘超过 30 秒后，启动器会调用 WebView2 的 TrySuspend 把
+整个渲染引擎挂起：dsh 页面停止后台渲染，不再烧 CPU/GPU 挤占系统合成器
+（此前表现为窗口还原不了、其他程序切不到前台）。唤出窗口立即 Resume 恢复，
+日志可在看门狗日志里看到 `TrySuspend 完成 ok=true` / `Resume 已提交`。
+
+30 秒宽限期内的快速隐藏/唤出不会挂起引擎，dsh 页面的 WebSocket 心跳不中断，
+不会触发"每次唤出都重连"的现象。挂起期间页面不收消息，恢复后会自动补拉。
+
+## 看门狗详情
+
 启动器内置一个看门狗线程（`src-tauri/src/watchdog.rs`），后台每 5 秒扫描自己的
 msedgewebview2 子进程树。某个子进程连续 20 秒吃掉超过 0.6 个核时，做两件事：
 
