@@ -251,28 +251,32 @@ fn refresh_auth_required(app: &AppHandle, state: &AppState, generation: u64, por
 /// WebView 里是否已经有这个端口的 dsh 认证 Cookie。
 ///
 /// dsh 的 Cookie 名字是 `dsh-auth-<把 host:port 哈希过的串>`，名字里认不出端口，
-/// 所以按 URL 查。必须用 127.0.0.1 查：内嵌页面和带令牌的地址都是
-/// http://127.0.0.1:<port>/，Cookie 是 host-only 的，拿 localhost 去查永远
-/// 查不到，会把已认证的会话误判成“需要认证”。
+/// 所以按 URL 查。前端 frameUrl 会把 iframe 地址的 host 换成宿主页面的 host，
+/// 生产构建宿主在 http://localhost:<port> 上，所以 iframe 和 Cookie 都落在
+/// localhost；开发构建宿主也是 localhost。旧版本曾固定 127.0.0.1，生产环境
+/// 下永远查不到 Cookie，把已认证会话误判成“需要认证”。
 /// 返回 None 表示这一刻查不了（底层 panic 已被兜住），调用方应维持现状等复查。
 fn has_auth_cookie(app: &AppHandle, port: u16) -> Option<bool> {
-    let Ok(url) = format!("http://127.0.0.1:{port}/").parse::<tauri::Url>() else {
-        return Some(false);
-    };
+    let urls: Vec<tauri::Url> = ["localhost", "127.0.0.1"]
+        .iter()
+        .filter_map(|host| format!("http://{host}:{port}/").parse::<tauri::Url>().ok())
+        .collect();
     // tauri-runtime-wry 的 cookies_for_url 在事件循环没应答时不是返回 Err 而是
     // 直接 panic（lib.rs 里的 rx.recv().unwrap()）。启动早期或窗口半死时查
     // cookie 会踩中，把整个调用任务一起带走——界面卡在“正在启动”就是它。
     // catch_unwind 兜住：查不了返回 None，等下一轮复查，别乱下结论。
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         app.webview_windows().values().any(|window| {
-            window
-                .cookies_for_url(url.clone())
-                .map(|cookies| {
-                    cookies
-                        .iter()
-                        .any(|cookie| cookie.name().starts_with("dsh-auth-"))
-                })
-                .unwrap_or(false)
+            urls.iter().any(|url| {
+                window
+                    .cookies_for_url(url.clone())
+                    .map(|cookies| {
+                        cookies
+                            .iter()
+                            .any(|cookie| cookie.name().starts_with("dsh-auth-"))
+                    })
+                    .unwrap_or(false)
+            })
         })
     }))
     .ok()

@@ -174,7 +174,10 @@ pub fn default_config() -> LauncherConfig {
 }
 
 #[tauri::command]
-pub fn save_config(app: AppHandle, config: LauncherConfig) -> Result<LauncherConfig, String> {
+pub async fn save_config(
+    app: AppHandle,
+    config: LauncherConfig,
+) -> Result<LauncherConfig, String> {
     let developer_mode_changed = read_config(&app)
         .map(|previous| previous.developer_mode != config.developer_mode)
         .unwrap_or(true);
@@ -188,7 +191,7 @@ pub fn save_config(app: AppHandle, config: LauncherConfig) -> Result<LauncherCon
 }
 
 #[tauri::command]
-pub fn save_window_size(app: AppHandle, width: u32, height: u32) -> Result<(), String> {
+pub async fn save_window_size(app: AppHandle, width: u32, height: u32) -> Result<(), String> {
     // Keep persisted dimensions within the same practical limits as the window
     // definition, and avoid writing transient zero-sized resize events.
     if !(1024..=4096).contains(&width) || !(560..=4096).contains(&height) {

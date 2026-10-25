@@ -3,7 +3,11 @@ use std::{
     collections::VecDeque,
     io::{BufRead, BufReader, Read},
     process::Child,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
+    time::Duration,
     thread,
 };
 use tauri::{AppHandle, Emitter, State};
@@ -42,8 +46,12 @@ pub struct LauncherStatus {
     pub safe_mode: bool,
     /// 连续启动失败次数（就绪后清零）。达到阈值时界面提供安全模式入口。
     pub consecutive_failures: u32,
-    pub logs: Vec<String>,
     pub busy: Option<String>,
+    /// 事件广播路径不带日志：日志风暴时每次序列化 400 条字符串是纯浪费
+    /// （前端根本不渲染它们），渲染进程主线程却被 JSON 解码拖累。
+    /// 完整快照只在 get_status / clear_logs 的响应里返回。
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub logs: Vec<String>,
 }
 
 pub struct RuntimeState {
@@ -106,6 +114,10 @@ pub struct AppState {
     // 串行化会改写安装目录/profile 的互斥操作（插件安装/卸载/更新、dsh 更新），
     // 防止并发的 npm/dsh 进程互相破坏同一份 package.json 或服务停启状态。
     pub ops: Arc<Mutex<()>>,
+    /// 状态广播合并：dsh 流式输出时每秒可能有几十行日志，若每行都全量广播
+    /// 状态（含 400 条日志），WebView 会被事件风暴淹没——窗口假死、渲染进程
+    /// 吃满一个核。这里记录"已有一次广播排队"，同一时刻只发一次。
+    pub status_emit_pending: Arc<AtomicBool>,
 }
 
 impl Default for AppState {
@@ -114,9 +126,14 @@ impl Default for AppState {
             runtime: Arc::new(Mutex::new(RuntimeState::default())),
             market: Arc::new(Mutex::new(None)),
             ops: Arc::new(Mutex::new(())),
+            status_emit_pending: Arc::new(AtomicBool::new(false)),
         }
     }
 }
+
+/// 两次状态广播之间的最小间隔。流式日志风暴被合并进一个 100ms 的节拍，
+/// 人眼无感，但事件量从"每行一条"降到"每秒最多 10 条"。
+const EMIT_COALESCE: Duration = Duration::from_millis(100);
 
 pub fn snapshot(runtime: &RuntimeState) -> LauncherStatus {
     LauncherStatus {
@@ -130,15 +147,55 @@ pub fn snapshot(runtime: &RuntimeState) -> LauncherStatus {
         external: runtime.external,
         safe_mode: runtime.safe_mode,
         consecutive_failures: runtime.consecutive_failures,
-        logs: runtime.logs.iter().cloned().collect(),
+        logs: Vec::new(),
         busy: runtime.busy.clone(),
     }
 }
 
+/// 带 400 条日志的完整快照：只给 get_status / clear_logs 这类显式请求用。
+fn snapshot_with_logs(runtime: &RuntimeState) -> LauncherStatus {
+    let mut status = snapshot(runtime);
+    status.logs = runtime.logs.iter().cloned().collect();
+    status
+}
+
 pub fn emit_status(app: &AppHandle, state: &AppState) {
-    if let Ok(runtime) = state.runtime.lock() {
-        let _ = app.emit("launcher-status", snapshot(&runtime));
+    emit_status_inner(app, state, false);
+}
+
+/// 日志路径用的节流版本：风暴时把多次调用合并成一次广播。
+/// 关键状态跃迁（启动/就绪/停止/失败）走 `emit_status` 立即发出，不等节拍。
+pub fn emit_status_throttled(app: &AppHandle, state: &AppState) {
+    emit_status_inner(app, state, true);
+}
+
+fn emit_status_inner(app: &AppHandle, state: &AppState, throttle: bool) {
+    if !throttle {
+        state.status_emit_pending.store(false, Ordering::SeqCst);
+        if let Ok(runtime) = state.runtime.lock() {
+            let _ = app.emit("launcher-status", snapshot(&runtime));
+        }
+        return;
     }
+    // 已经有一次广播在路上（还没到节拍点）就不重复排了；最后一次调用只
+    // 需要保证锁不长期被占。真正的发送在节拍线程里做。
+    if state
+        .status_emit_pending
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return;
+    }
+    let app = app.clone();
+    let state = state.clone();
+    thread::spawn(move || {
+        thread::sleep(EMIT_COALESCE);
+        // 节拍到了才真正广播；期间积压的所有变化随这一次全量快照一起送达。
+        state.status_emit_pending.store(false, Ordering::SeqCst);
+        if let Ok(runtime) = state.runtime.lock() {
+            let _ = app.emit("launcher-status", snapshot(&runtime));
+        }
+    });
 }
 
 /// 从 dsh web 的启动输出里取出带认证令牌的地址。
@@ -178,7 +235,7 @@ pub fn push_log(app: &AppHandle, state: &AppState, generation: u64, source: &str
             runtime.logs.pop_front();
         }
     }
-    emit_status(app, state);
+    emit_status_throttled(app, state);
 }
 
 pub fn spawn_log_reader<R>(
@@ -201,7 +258,7 @@ pub fn current_status(state: AppState) -> Result<LauncherStatus, String> {
     state
         .runtime
         .lock()
-        .map(|runtime| snapshot(&runtime))
+        .map(|runtime| snapshot_with_logs(&runtime))
         .map_err(|_| "启动器状态锁已损坏".into())
 }
 
@@ -274,7 +331,7 @@ pub fn auth_url_consumed(
 pub fn clear_logs(state: State<'_, AppState>) -> Result<LauncherStatus, String> {
     let mut runtime = state.runtime.lock().map_err(|_| "启动器状态锁已损坏")?;
     runtime.logs.clear();
-    Ok(snapshot(&runtime))
+    Ok(snapshot_with_logs(&runtime))
 }
 
 #[cfg(test)]

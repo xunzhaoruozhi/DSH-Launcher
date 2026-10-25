@@ -14,8 +14,10 @@
 mod config;
 mod download;
 mod dsh_files;
-#[cfg(target_os = "windows")]
-mod theme_sync;
+// 临时禁用：PrintWindow 采样疑似与 WebView2 渲染互相激励，导致渲染进程
+// CPU 满核、窗口假死（2026-10-25 排查），确认根因前先关闭。
+// #[cfg(target_os = "windows")]
+// mod theme_sync;
 mod exec;
 mod market;
 mod plugins;
@@ -25,6 +27,7 @@ mod summon;
 mod tray;
 mod updates;
 mod util;
+mod watchdog;
 mod webserve;
 mod windows_ui;
 
@@ -100,8 +103,10 @@ pub fn run() {
             // 注册全局唤出快捷键（按配置；后台线程执行，避免主线程自锁）。
             summon::apply(app.handle());
             // 顶栏颜色跟随 dsh 页面主题（日间/夜间切换时同步变色）。
-            #[cfg(target_os = "windows")]
-            theme_sync::start(app.handle().clone());
+            // #[cfg(target_os = "windows")]
+            // theme_sync::start(app.handle().clone());
+            // WebView2 子进程树高 CPU 看门狗：窗口假死时留下进程级证据。
+            watchdog::start(app.handle().clone());
             Ok(())
         })
         .on_window_event(|window, event| {

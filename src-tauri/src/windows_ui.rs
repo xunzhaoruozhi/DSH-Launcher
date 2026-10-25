@@ -158,9 +158,8 @@ pub fn spawn_launcher_window_named(
     // dsh WebUI 在 1023px 以下切换到移动布局；保持窗口宽度高于断点，
     // 让内嵌页面始终使用桌面布局。
     let width = width.max(1024.0);
-    let developer_mode = crate::config::read_config(app)
-        .map(|config| config.developer_mode)
-        .unwrap_or(false);
+    let config = crate::config::read_config(app).unwrap_or_default();
+    let developer_mode = config.developer_mode;
     let mut builder = WebviewWindowBuilder::new(app, &label, launcher_url(app)?)
         .title("DSH Launcher")
         .inner_size(width, height)
@@ -189,8 +188,21 @@ pub fn spawn_launcher_window_named(
     }
     #[cfg(target_os = "windows")]
     {
+        // 把 dsh 的源隔离进独立渲染进程（站点隔离）。否则它和壳子页面同站
+        // （localhost 不同端口），共用一个渲染进程：dsh 页面流式输出烧 CPU
+        // 时，壳子的输入响应与绘制被一起挤死，表现为整个窗口点不动。
+        // WebView2 默认不开站点隔离，--isolate-origins 单独传不生效，
+        // 必须同时带 --site-per-process 才会把 iframe 拆成独立渲染进程。
+        let dsh_origins = format!(
+            "http://localhost:{},http://127.0.0.1:{}",
+            config.port, config.port
+        );
         builder = builder.additional_browser_args(
-            "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection",
+            format!(
+                "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection \
+                 --enable-features=SitePerProcess --isolate-origins={dsh_origins}"
+            )
+            .as_str(),
         );
     }
     builder = match position {

@@ -103,6 +103,39 @@ npm run tauri build
 配置保存在 Tauri 的应用配置目录中。
 
 
+## WebView 看门狗（卡死排查）
+
+启动器内置一个看门狗线程（`src-tauri/src/watchdog.rs`），后台每 5 秒扫描自己的
+msedgewebview2 子进程树。某个子进程连续 20 秒吃掉超过 0.6 个核时，做两件事：
+
+1. **自动降级**：如果高 CPU 的是 `--type=renderer` 渲染进程，把它降到
+   BELOW_NORMAL 优先级。dsh iframe 和壳子页面同站（localhost 不同端口），
+   WebView2 不支持 iframe 级进程隔离，两者共用一个渲染进程；不加限制时，
+   dsh 页面流式输出烧 CPU 会把壳子的输入响应与绘制一起挤死，表现为整个
+   窗口点不动、殃及其他程序无法切换到前台。降级后渲染进程只能用剩余 CPU，
+   壳子保持可操作，冷却后自动恢复正常优先级。
+2. **留证据**：把进程树、内存、CPU 和当时的启动器状态消息追加写入日志：
+
+```
+%APPDATA%\ai.deepseek.dsh-launcher\webview-watchdog.log
+```
+
+用途：窗口"点不动、转圈、假死"这类问题事后无法复现，日志会在事发现场留下
+进程级证据，不用再靠猜。
+
+排查口诀：
+
+- 日志出现"持续高 CPU"与"已降级优先级"，指向 msedgewebview2 的
+  `--type=renderer` 子进程 → 页面（Web 侧）在烧 CPU，看当时的 dsh 是否在
+  流式输出。降级只是保壳子不卡，页面本身要流畅还得看 Web 侧
+- 日志出现"优先级已恢复" → 烧 CPU 结束，渲染进程回到正常调度
+- CPU 全部安静但窗口仍然无响应 → 客户端主线程被同步调用卡住（锁/IPC）
+- `dsh-launcher.exe` 自身 CPU 飙高 → 后端 Rust 代码在忙
+
+日志超过 512KB 自动轮转为 `.log.old`；`watchdog 启动` 行出现在每次启动器
+冷启动时，可用于对齐时间线。相关沉疴与修复记录见 git log（状态广播节流、
+事件去 logs 字段、theme_sync 停用）。
+
 
 ## 相关链接
 
