@@ -899,7 +899,7 @@ dependencies = [
 
 [[package]]
 name = "dsh-launcher"
-version = "0.7.2"
+version = "0.7.3"
 dependencies = [
  "dirs 6.0.0",
  "libc",
