@@ -12,6 +12,8 @@ use crate::{
     windows_ui::{open_workspace, show_control},
 };
 
+use crate::windows_ui::set_webview_suspended;
+
 pub fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
     let open = MenuItem::with_id(app, "open", "打开 DSH", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, "settings", "启动设置", true, None::<&str>)?;
@@ -26,13 +28,18 @@ pub fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
     tray.on_menu_event(|app, event| match event.id().as_ref() {
         "open" => {
             let state = app.state::<AppState>();
+            set_webview_suspended(app, false);
             if open_workspace(app.clone(), state).is_err() {
                 show_control(app);
             }
         }
-        "settings" => show_control(app),
+        "settings" => {
+            set_webview_suspended(app, false);
+            show_control(app);
+        }
         // 安全模式：一次性隔离环境启动，用于正式环境起不来时的修复。
         "safe-mode" => {
+            set_webview_suspended(app, false);
             show_control(app);
             let app_handle = app.clone();
             thread::spawn(move || {

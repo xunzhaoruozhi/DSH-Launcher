@@ -110,6 +110,14 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            // 最小化/还原会触发 Resized：立即对齐 WebView2 挂起状态，
+            // 还原窗口时不用等看门狗 5 秒周期才恢复渲染。
+            #[cfg(target_os = "windows")]
+            if window.label().starts_with("control")
+                && matches!(event, tauri::WindowEvent::Resized(_))
+            {
+                crate::windows_ui::sync_webview_suspension(window.app_handle());
+            }
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 // 只有主窗口关闭时驻留托盘；新建的窗口正常销毁，
                 // 否则每次“关闭”都只是隐藏，越积越多。

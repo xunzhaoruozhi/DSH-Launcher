@@ -5,7 +5,10 @@ use std::thread;
 use tauri::{AppHandle, Manager};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
-use crate::config::read_config;
+use crate::{
+    config::read_config,
+    windows_ui::{set_webview_suspended, sync_webview_suspension},
+};
 
 /// 读取配置里的 summon_shortcut 并重新注册热键。空字符串＝禁用。
 ///
@@ -38,7 +41,11 @@ fn toggle_control(app: &AppHandle) {
         let focused = window.is_focused().unwrap_or(false);
         if visible && focused {
             let _ = window.hide();
+            // 隐藏即挂起 WebView2，后台不再渲染（同步状态由看门狗兜底）。
+            sync_webview_suspension(app);
         } else {
+            // 挂起的引擎必须先恢复再显示，否则窗口亮出来是一帧静止画面。
+            set_webview_suspended(app, false);
             let _ = window.unminimize();
             let _ = window.show();
             let _ = window.set_focus();
