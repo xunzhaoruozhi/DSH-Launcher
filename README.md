@@ -35,6 +35,10 @@
 - 外部服务退出后，界面自动回到可启动状态，可以一键改由 Launcher 启动
 - 只有占用者不是 Web 服务（例如残留的半死进程）时才会提示端口冲突
 
+## 构建注意：必须走 tauri CLI
+
+发布包一律用 `npm run tauri -- build --no-bundle` 构建。直接 `cargo build --release` 会缺 `custom-protocol` feature，Tauri 会把产物当成开发模式去连 Vite（localhost:1420）——没有 dev server 时，窗口里就会显示一张和 Edge 一模一样的「localhost 拒绝连接」报错页（WebView2 与 Edge 同内核，报错页也同款）。判断方法：生产模式下 Launcher 进程名下会有一个 127.0.0.1 随机端口监听（自身的静态页面服务器），没有监听就是构建方式错了。
+
 ## 增强插件
 
 以下插件均属于功能与体验增强，不会较大幅度干扰 DSH 的 loop 工作流：
