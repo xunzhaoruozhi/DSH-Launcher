@@ -55,6 +55,9 @@ pub fn set_webview_suspended(app: &AppHandle, suspended: bool) {
         if !label.starts_with("control") {
             continue;
         }
+        // with_webview 只把闭包投递到主线程，本身不等待；绝不能在闭包外
+        // 阻塞等它的结果——主线程被 WebView2 拖慢时会把调用线程一起锁死
+        //（此前看门狗就这样被 is_visible 的同步等待连带冻住 22 分钟）。
         let _ = window.with_webview(move |webview| unsafe {
             let _ = webview.controller().SetIsVisible((!suspended).into());
         });

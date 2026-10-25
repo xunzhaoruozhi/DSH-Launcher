@@ -10,6 +10,7 @@ use std::{
     fs::{self, OpenOptions},
     io::Write,
     path::PathBuf,
+    sync::atomic::{AtomicI64, Ordering as AtomicOrdering},
     thread,
     time::{Duration, Instant},
 };
@@ -31,6 +32,18 @@ const CPU_LIMIT: f32 = 60.0;
 const RELOG_EVERY: Duration = Duration::from_secs(60);
 /// 日志上限，超过就轮转成 .old。
 const LOG_LIMIT: u64 = 512 * 1024;
+
+/// 主线程心跳（Unix 秒）。看门狗每轮向主线程投递一个任务，任务执行时
+/// 更新时间戳；主线程卡死时时间戳停止推进，日志里立刻能分辨
+/// 「主线程卡死」还是「进程已死」。投递本身不等待，看门狗不会被连带冻住。
+static MAIN_THREAD_HEARTBEAT: AtomicI64 = AtomicI64::new(0);
+
+fn now_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64
+}
 
 fn log_path(app: &AppHandle) -> Option<PathBuf> {
     app.path()
@@ -96,13 +109,32 @@ pub fn start(app: AppHandle) {
         // 已被降级的渲染进程；冷却或退出后恢复正常优先级。
         let mut demoted: Vec<u32> = Vec::new();
         append_log(&app, &format!("watchdog 启动，launcher pid={}", me));
+        let mut last_hang_log: Option<Instant> = None;
         loop {
             thread::sleep(POLL);
-            // Windows：对齐 WebView2 挂起状态——所有主窗口都不可见/最小化
-            // 时挂起引擎，任一可见时恢复。托盘关闭、JS 隐藏等任何路径藏起
-            // 窗口后，后台都不再渲染，不再挤占系统合成器。
+            // Windows：把渲染开关对齐任务投递到主线程执行。绝不能在后台
+            // 线程直接调 is_visible()——它向主线程发消息并无限期等待，
+            // 主线程被 WebView2 同步调用拖住时，看门狗会一起被冻死，
+            // 黑匣子恰恰在最需要它的时刻失明（此前复现过 22 分钟无日志）。
             #[cfg(target_os = "windows")]
-            sync_webview_suspension(&app);
+            {
+                let app_handle = app.clone();
+                let _ = app.run_on_main_thread(move || {
+                    MAIN_THREAD_HEARTBEAT.store(now_secs(), AtomicOrdering::Relaxed);
+                    sync_webview_suspension(&app_handle);
+                });
+                // 主线程心跳超过 30 秒没推进 = 主线程卡死（热键/托盘/窗口
+                // 全会失灵，其他程序也切不了前台）。1 分钟最多记一条。
+                let last = MAIN_THREAD_HEARTBEAT.load(AtomicOrdering::Relaxed);
+                let now = now_secs();
+                if last > 0
+                    && now - last > 30
+                    && last_hang_log.is_none_or(|t| t.elapsed() >= Duration::from_secs(60))
+                {
+                    append_log(&app, &format!("主线程疑似卡死：心跳已 {} 秒未推进", now - last));
+                    last_hang_log = Some(Instant::now());
+                }
+            }
             // 默认刷新不包含命令行；渲染进程识别依赖 --type=renderer，
             // 必须显式要求刷新 cmd，否则 cmd() 恒为空、降级永远不触发。
             system.refresh_processes_specifics(
