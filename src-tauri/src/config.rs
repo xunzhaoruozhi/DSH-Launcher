@@ -42,9 +42,10 @@ pub struct LauncherConfig {
     pub download_directory: String,
     pub download_ask: bool,
     pub download_choose_location: bool,
-    pub auto_check_updates: bool,
     /// 全局唤出快捷键（如 "Alt+Shift+D"）；空字符串表示禁用。
     pub summon_shortcut: String,
+    /// 允许通过快捷键打开 WebView 开发者工具；发行版默认关闭。
+    pub developer_mode: bool,
     pub window_width: u32,
     pub window_height: u32,
 }
@@ -75,8 +76,8 @@ impl Default for LauncherConfig {
             download_directory,
             download_ask: false,
             download_choose_location: false,
-            auto_check_updates: true,
             summon_shortcut: "Alt+Shift+D".into(),
+            developer_mode: false,
             window_width: 1100,
             window_height: 760,
         }
@@ -174,9 +175,15 @@ pub fn default_config() -> LauncherConfig {
 
 #[tauri::command]
 pub fn save_config(app: AppHandle, config: LauncherConfig) -> Result<LauncherConfig, String> {
+    let developer_mode_changed = read_config(&app)
+        .map(|previous| previous.developer_mode != config.developer_mode)
+        .unwrap_or(true);
     save_config_file(&app, &config)?;
     // 保存即生效：按新配置重新注册全局唤出快捷键（内部走后台线程，主线程安全）。
     crate::summon::apply(&app);
+    if developer_mode_changed {
+        crate::windows_ui::apply_devtools_setting(&app, config.developer_mode)?;
+    }
     Ok(config)
 }
 

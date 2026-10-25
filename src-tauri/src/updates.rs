@@ -1,5 +1,4 @@
 use serde::Serialize;
-use std::{io::Read, time::Duration};
 use tauri::{AppHandle, State};
 
 use crate::{
@@ -13,9 +12,6 @@ use crate::{
     util::{epoch_secs, version_key},
 };
 
-const LAUNCHER_RELEASE_API: &str =
-    "https://api.github.com/repos/xunzhaoruozhi/DSH-Launcher/releases/latest";
-
 #[derive(Debug, Clone, Serialize)]
 pub struct PackageInfo {
     pub current_version: String,
@@ -23,18 +19,6 @@ pub struct PackageInfo {
     pub source: String,
     pub checked_at: String,
     pub detail: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ReleaseInfo {
-    pub current_version: String,
-    pub latest_version: String,
-    pub tag_name: String,
-    pub name: String,
-    pub body: String,
-    pub html_url: String,
-    pub published_at: String,
-    pub update_available: bool,
 }
 
 fn extract_version(value: &str) -> String {
@@ -115,51 +99,6 @@ fn resolve_latest_version(config: &LauncherConfig) -> Result<String, String> {
 #[tauri::command]
 pub fn get_launcher_version() -> String {
     env!("CARGO_PKG_VERSION").into()
-}
-
-#[tauri::command]
-pub async fn check_launcher_update() -> Result<ReleaseInfo, String> {
-    let agent = ureq::AgentBuilder::new()
-        .timeout(Duration::from_secs(15))
-        .user_agent(concat!("dsh-launcher/", env!("CARGO_PKG_VERSION")))
-        .build();
-    let response = agent
-        .get(LAUNCHER_RELEASE_API)
-        .set("Accept", "application/vnd.github+json")
-        .call()
-        .map_err(|error| format!("无法访问 GitHub Release：{error}"))?;
-    let mut body = String::new();
-    response
-        .into_reader()
-        .take(4 * 1024 * 1024)
-        .read_to_string(&mut body)
-        .map_err(|error| format!("GitHub Release 响应无效：{error}"))?;
-    let value: serde_json::Value =
-        serde_json::from_str(&body).map_err(|error| format!("GitHub Release 响应无效：{error}"))?;
-    let text = |key: &str| {
-        value
-            .get(key)
-            .and_then(|item| item.as_str())
-            .unwrap_or_default()
-            .to_string()
-    };
-    let tag_name = text("tag_name");
-    if tag_name.is_empty() {
-        return Err("GitHub 没有可用的最新 Release".into());
-    }
-    let current_version = env!("CARGO_PKG_VERSION").to_string();
-    let latest_version = tag_name.trim_start_matches(['v', 'V']).to_string();
-    let update_available = version_key(&latest_version) > version_key(&current_version);
-    Ok(ReleaseInfo {
-        current_version,
-        latest_version,
-        tag_name,
-        name: text("name"),
-        body: text("body"),
-        html_url: text("html_url"),
-        published_at: text("published_at"),
-        update_available,
-    })
 }
 
 #[tauri::command]

@@ -34,6 +34,37 @@ const EXTERNAL_LINK_BRIDGE: &str = r#"
   if (window.__DSH_LAUNCHER_EXTERNAL_LINKS__) return;
   window.__DSH_LAUNCHER_EXTERNAL_LINKS__ = true;
 
+  // These file-copy controls are rendered inside DSH's embedded WebUI. They
+  // are not part of the desktop workflow, so remove them from every iframe.
+  if (window !== window.top) {
+    const removeFileCopyControls = () => {
+      const id = 'dsh-launcher-hide-copy-file-controls';
+      if (document.getElementById(id)) return;
+      const root = document.head || document.documentElement;
+      if (!root) return;
+      const style = document.createElement('style');
+      style.id = id;
+      style.textContent = '[data-mobile-nav="copy-file"] { display: none !important; }';
+      root.appendChild(style);
+    };
+    removeFileCopyControls();
+    document.addEventListener('DOMContentLoaded', removeFileCopyControls, { once: true });
+  }
+
+  const isDeveloperToolsShortcut = (event) => event.key === 'F12'
+    || (event.ctrlKey && event.shiftKey && !event.altKey && !event.metaKey
+      && event.key.toLowerCase() === 'i');
+  document.addEventListener('keydown', (event) => {
+    if (!isDeveloperToolsShortcut(event)) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    if (window === window.top) {
+      window.__TAURI_INTERNALS__?.invoke('open_developer_tools')?.catch(() => {});
+    } else {
+      window.top.postMessage({ type: 'dsh-launcher-open-devtools' }, '*');
+    }
+  }, true);
+
   const isLoopback = (hostname) => hostname === 'localhost'
     || hostname === '127.0.0.1'
     || hostname === '[::1]';
@@ -54,6 +85,10 @@ const EXTERNAL_LINK_BRIDGE: &str = r#"
 
   if (window === window.top) {
     window.addEventListener('message', (event) => {
+      if (event.data?.type === 'dsh-launcher-open-devtools') {
+        window.__TAURI_INTERNALS__?.invoke('open_developer_tools')?.catch(() => {});
+        return;
+      }
       if (event.data?.type !== 'dsh-launcher-open-external'
         || typeof event.data.url !== 'string') return;
       openExternal(event.data.url);
@@ -136,14 +171,17 @@ pub fn spawn_launcher_window_named(
     // the bundled frontend in production. External URLs do not reliably get
     // the launcher initialization scripts and window APIs.
     let (width, height) = size.unwrap_or((1100.0, 760.0));
-    // dsh WebUI 的移动端断点是 1023px：窗口比它窄会进移动布局，之后窗口一旦
-    // 变宽，已渲染的移动端元素（如 data-mobile-nav 复制按钮）会失去样式变成
-    // 裸按钮，dsh 不会回收。最小宽度压过断点，让内嵌页面始终走桌面布局。
+    // dsh WebUI 在 1023px 以下切换到移动布局；保持窗口宽度高于断点，
+    // 让内嵌页面始终使用桌面布局。
     let width = width.max(1024.0);
+    let developer_mode = crate::config::read_config(app)
+        .map(|config| config.developer_mode)
+        .unwrap_or(false);
     let mut builder = WebviewWindowBuilder::new(app, &label, launcher_url(app)?)
         .title("DSH Launcher")
         .inner_size(width, height)
         .min_inner_size(1024.0, 560.0)
+        .devtools(developer_mode)
         .resizable(true)
         .visible(false);
     // macOS：启用原生装饰 + 叠加标题栏，露出标准红黄绿按钮（左侧）。
@@ -168,7 +206,7 @@ pub fn spawn_launcher_window_named(
     #[cfg(target_os = "windows")]
     {
         builder = builder.additional_browser_args(
-            "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --remote-debugging-port=9333",
+            "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection",
         );
     }
     builder = match position {
@@ -300,6 +338,58 @@ pub fn hide_tab_drag_preview(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 pub async fn new_launcher_window(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     spawn_launcher_window(&app, state.inner(), None, None, None)
+}
+
+#[tauri::command]
+pub fn open_developer_tools(window: tauri::WebviewWindow) -> Result<(), String> {
+    let config = crate::config::read_config(&window.app_handle())?;
+    if config.developer_mode {
+        window.open_devtools();
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+pub fn apply_devtools_setting(app: &AppHandle, enabled: bool) -> Result<(), String> {
+    for (label, window) in app.webview_windows() {
+        if !label.starts_with("control") {
+            continue;
+        }
+        set_window_devtools_enabled(&window, enabled)
+            .map_err(|error| format!("无法更新窗口 {label} 的开发者工具权限：{error}"))?;
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn apply_devtools_setting(_app: &AppHandle, _enabled: bool) -> Result<(), String> {
+    // 其他平台在创建 WebView 时读取 developer_mode；新窗口会立即使用新设置。
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn set_window_devtools_enabled(window: &tauri::WebviewWindow, enabled: bool) -> Result<(), String> {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    window
+        .with_webview(move |webview| {
+            let result = unsafe {
+                webview
+                    .controller()
+                    .CoreWebView2()
+                    .map_err(|error| error.to_string())
+                    .and_then(|webview| webview.Settings().map_err(|error| error.to_string()))
+                    .and_then(|settings| {
+                        settings
+                            .SetAreDevToolsEnabled(enabled)
+                            .map_err(|error| error.to_string())
+                    })
+            };
+            let _ = sender.send(result);
+        })
+        .map_err(|error| error.to_string())?;
+    receiver
+        .recv_timeout(Duration::from_secs(5))
+        .map_err(|error| format!("等待 WebView2 更新超时：{error}"))?
 }
 
 #[tauri::command]

@@ -38,7 +38,7 @@ import "./styles.css";
 
 type LaunchMode = "command" | "npx";
 type Phase = "stopped" | "starting" | "ready" | "stopping" | "failed";
-type DialogId = "manage-dialog" | "config-dialog" | "plugin-dialog" | "settings-dialog" | "update-dialog";
+type DialogId = "manage-dialog" | "config-dialog" | "plugin-dialog" | "settings-dialog";
 
 interface LauncherConfig {
   launch_mode: LaunchMode;
@@ -56,7 +56,7 @@ interface LauncherConfig {
   download_directory: string;
   download_ask: boolean;
   download_choose_location: boolean;
-  auto_check_updates: boolean;
+  developer_mode: boolean;
   window_width: number;
   window_height: number;
 }
@@ -102,17 +102,6 @@ interface PackageInfo {
   detail: string;
 }
 
-interface ReleaseInfo {
-  current_version: string;
-  latest_version: string;
-  tag_name: string;
-  name: string;
-  body: string;
-  html_url: string;
-  published_at: string;
-  update_available: boolean;
-}
-
 interface ConfigFileInfo {
   id: string;
   name: string;
@@ -148,7 +137,6 @@ app.innerHTML = `
       <div id="tab-zone" class="tab-zone" data-tauri-drag-region>
         <div id="tab-strip" class="tab-strip" role="tablist" aria-label="dsh 标签页"></div>
         <div id="tab-drop-indicator" class="tab-drop-indicator" aria-hidden="true" hidden></div>
-        <button id="tab-add" class="tab-add" title="新建标签页（Ctrl+T）"><i data-lucide="plus"></i></button>
       </div>
       <nav class="window-controls" aria-label="窗口控制">
         <button id="refresh-web" title="刷新 dsh WebUI"><i data-lucide="refresh-cw"></i></button>
@@ -258,25 +246,17 @@ app.innerHTML = `
             <div class="field full"><label for="setting-summon-shortcut">全局唤出快捷键</label><div class="input-with-hint"><input id="setting-summon-shortcut" autocomplete="off" spellcheck="false" placeholder="例如 Alt+Shift+D"><small class="field-hint">任意程序里按下即唤出/收起主窗口，留空则禁用</small></div></div></div>
           <label class="check-row"><input id="setting-auto-start" type="checkbox"><span><strong>启动后自动启动 dsh Web 服务</strong><small>Launcher 打开后立即启动本地服务</small></span></label>
           <label class="check-row"><input id="setting-stop-dsh" type="checkbox"><span><strong>退出 Launcher 时结束 dsh</strong><small>只结束由当前 Launcher 启动并登记的进程树</small></span></label>
+          <div class="settings-section developer-section"><p class="eyebrow">DEVELOPER</p><h3>开发者模式</h3>
+            <label class="check-row compact"><input id="setting-developer-mode" type="checkbox"><span><strong>启用开发者工具</strong><small>开启后按 F12 或 Ctrl+Shift+I 调试当前窗口（包括内嵌的 DSH 页面）；关闭后快捷键不可用。发行版同样支持。</small></span></label>
+          </div>
           <div class="settings-section download-section"><p class="eyebrow">DOWNLOAD</p><h3>下载</h3>
             <div class="field full"><label for="setting-download-directory">默认下载目录</label><div class="path-input"><input id="setting-download-directory" autocomplete="off" spellcheck="false"><button id="browse-download-directory" type="button" class="icon-button" title="选择下载目录"><i data-lucide="folder-open"></i></button></div></div>
             <label class="check-row"><input id="setting-download-ask" type="checkbox"><span><strong>下载前确认</strong><small>每次下载前弹出确认提示</small></span></label>
             <label class="check-row compact"><input id="setting-download-choose" type="checkbox"><span><strong>下载前选择保存位置</strong><small>显示“另存为”对话框，可同时修改文件名</small></span></label>
           </div>
-          <div class="settings-section about-section"><p class="eyebrow">ABOUT</p><h3>关于 DSH Launcher</h3><p class="about-copy">当前版本 <strong id="launcher-version">读取中</strong></p><div class="about-actions"><a class="button quiet" data-external href="https://github.com/xunzhaoruozhi/DSH-Launcher"><i data-lucide="github"></i><span>GitHub 仓库</span></a><a class="button primary" data-external href="https://github.com/xunzhaoruozhi/DSH-Launcher/releases"><i data-lucide="external-link"></i><span>前往 Release 下载更新</span></a></div></div>
-          <!-- 更新检查暂时下线（手动推送发版；恢复时去掉两个 hidden 即可） -->
-          <label class="check-row compact update-check-row" hidden><input id="setting-auto-check-updates" type="checkbox"><span><strong>启动时自动检查更新</strong><small>每次打开 Launcher 时检查 GitHub Release，不会自动下载</small></span></label>
-          <div class="about-actions update-actions" hidden><button id="check-launcher-update" class="button quiet"><i data-lucide="refresh-cw"></i><span>检查更新</span></button></div>
+          <div class="settings-section about-section"><p class="eyebrow">ABOUT</p><h3>关于 DSH Launcher</h3><p class="about-copy">当前版本 <strong id="launcher-version">读取中</strong></p><div class="about-actions"><a class="button quiet" data-external href="https://github.com/xunzhaoruozhi/DSH-Launcher"><i data-lucide="github"></i><span>GitHub 仓库</span></a></div></div>
         </div>
         <footer class="modal-footer"><span id="settings-save-result"></span><button id="save-settings" class="button primary"><i data-lucide="save"></i><span>保存设置</span></button></footer>
-      </section>
-    </div>
-    <div id="update-dialog" class="modal" hidden>
-      <div class="modal-backdrop" data-close-modal></div>
-      <section class="modal-panel update-panel" role="dialog" aria-modal="true" aria-labelledby="update-title">
-        <header class="modal-header"><div><p class="eyebrow">DSH LAUNCHER</p><h2 id="update-title">发现新版本</h2></div><button class="modal-close" data-close-modal title="关闭"><i data-lucide="x"></i></button></header>
-        <div class="update-content"><div class="update-version-line"><strong id="update-version"></strong><span id="update-published"></span></div><div id="update-body" class="update-body"></div></div>
-        <footer class="modal-footer"><span>更新不会自动下载</span><a id="update-release-link" class="button primary" data-external href="#"><i data-lucide="external-link"></i><span>查看 Release</span></a></footer>
       </section>
     </div>
     <div id="toast" class="toast" role="status" hidden></div>
@@ -378,7 +358,7 @@ function fillSettings(): void {
   $("#setting-download-directory").value = config.download_directory;
   $("#setting-download-ask").checked = config.download_ask;
   $("#setting-download-choose").checked = config.download_choose_location;
-  $("#setting-auto-check-updates").checked = config.auto_check_updates;
+  $("#setting-developer-mode").checked = config.developer_mode;
   $("#launcher-version").textContent = launcherVersion;
   if (currentWindow.label === "control") $("#window-close").title = config.close_behavior === "tray" ? "关闭到托盘" : "退出 Launcher";
 }
@@ -391,7 +371,7 @@ function readSettings(): LauncherConfig {
     download_directory: $("#setting-download-directory").value.trim(),
     download_ask: $("#setting-download-ask").checked,
     download_choose_location: $("#setting-download-choose").checked,
-    auto_check_updates: $("#setting-auto-check-updates").checked,
+    developer_mode: $("#setting-developer-mode").checked,
   };
 }
 async function saveSettings(): Promise<void> {
@@ -884,39 +864,6 @@ async function refreshPackageInfo(): Promise<void> {
   } catch (error) { $("#package-source").textContent = "检查失败"; toast(String(error), true); }
 }
 
-function formatReleaseDate(value: string): string {
-  const date = Date.parse(value);
-  return Number.isNaN(date) ? "" : new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "short", day: "numeric" }).format(date);
-}
-
-function showReleaseDialog(release: ReleaseInfo): void {
-  $("#update-title").textContent = release.name.trim() || "发现新版本";
-  $("#update-version").textContent = release.tag_name || release.latest_version;
-  $("#update-published").textContent = formatReleaseDate(release.published_at);
-  const body = release.body.trim();
-  $("#update-body").innerHTML = body ? escapeHtml(body).replace(/\r?\n/g, "<br>") : "此版本没有发布说明。";
-  const link = $<HTMLAnchorElement>("#update-release-link");
-  link.href = release.html_url;
-  $("#update-dialog").hidden = false;
-}
-
-async function checkLauncherUpdate(showNoUpdate = false): Promise<void> {
-  const button = $<HTMLButtonElement>("#check-launcher-update");
-  button.disabled = true;
-  try {
-    const release = await invoke<ReleaseInfo>("check_launcher_update");
-    if (release.update_available) {
-      showReleaseDialog(release);
-      toast(`发现 Launcher 新版本 ${release.latest_version}`);
-    } else if (showNoUpdate) {
-      toast(`当前已是最新版本（${release.current_version}）`);
-    }
-  } catch (error) {
-    if (showNoUpdate) toast(`检查更新失败：${String(error)}`, true);
-  } finally {
-    button.disabled = false;
-  }
-}
 async function saveStartupConfig(): Promise<void> {
   try {
     config = await invoke<LauncherConfig>("save_config", { config: readForm() });
@@ -1230,7 +1177,6 @@ $("#save-config-file").addEventListener("click", () => void saveConfigFile());
 $("#open-config-file").addEventListener("click", () => void invoke("open_dsh_config", { id: $("#config-file-select").value }));
 $("#manage-save").addEventListener("click", () => void saveStartupConfig());
 $("#save-settings").addEventListener("click", () => void saveSettings());
-$("#check-launcher-update").addEventListener("click", () => void checkLauncherUpdate(true));
 $("#check-package").addEventListener("click", () => void refreshPackageInfo());
 $("#update-package").addEventListener("click", async () => {
   const output = $("#manage-output");
@@ -1288,7 +1234,6 @@ document.addEventListener("click", (event) => {
 $("#browse-workspace").addEventListener("click", async () => { const selected = await open({ directory: true, multiple: false, defaultPath: $("#working-directory").value || undefined }); if (typeof selected === "string") $("#working-directory").value = selected; });
 $("#browse-download-directory").addEventListener("click", async () => { const selected = await open({ directory: true, multiple: false, defaultPath: $("#setting-download-directory").value || undefined }); if (typeof selected === "string") $("#setting-download-directory").value = selected; });
 $("#refresh-web").addEventListener("click", refreshWeb);
-$("#tab-add").addEventListener("click", () => addTab());
 // 标签多到放不下时用滚轮横向滚动标签条。
 $("#tab-strip").addEventListener("wheel", (event) => {
   const strip = $("#tab-strip");
@@ -1312,8 +1257,7 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") { closeDialogs(); return; }
   if (!event.ctrlKey || event.altKey || event.metaKey) return;
   const key = event.key.toLowerCase();
-  if (key === "t" && !event.shiftKey) { event.preventDefault(); addTab(); }
-  else if (key === "w" && !event.shiftKey) { event.preventDefault(); removeTab(activeTab); }
+  if (key === "w" && !event.shiftKey) { event.preventDefault(); removeTab(activeTab); }
   else if (key === "tab") { event.preventDefault(); cycleTab(event.shiftKey ? -1 : 1); }
 });
 
@@ -1359,8 +1303,6 @@ async function init(): Promise<void> {
   fillSettings();
   renderStatus(loadedStatus);
   await revealWindow();
-  // 更新检查暂时下线：手动推送发版；恢复时取消下一行注释即可。
-  // if (currentWindow.label === "control" && config.auto_check_updates) void checkLauncherUpdate(false);
   // 有互斥操作在进行时不自动启动：操作方会在结束后自行恢复服务。
   if (config.auto_start && loadedStatus.phase === "stopped" && !loadedStatus.busy) await runAction("start_dsh");
 }

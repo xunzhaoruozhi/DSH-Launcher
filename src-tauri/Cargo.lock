@@ -905,6 +905,7 @@ dependencies = [
  "tauri-plugin-dialog",
  "tauri-plugin-global-shortcut",
  "ureq",
+ "webview2-com",
  "window-vibrancy 0.5.3",
  "windows-sys 0.59.0",
 ]
