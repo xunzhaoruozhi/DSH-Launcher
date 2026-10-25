@@ -46,6 +46,10 @@ pub struct LauncherConfig {
     pub summon_shortcut: String,
     /// 允许通过快捷键打开 WebView 开发者工具；发行版默认关闭。
     pub developer_mode: bool,
+    /// 窗口全部隐藏/最小化超过宽限期后挂起 WebView2 引擎（后台不渲染，
+    /// 但页面 WebSocket 会断、唤出时重连）。默认关闭：保持页面一直在线，
+    /// 后台高 CPU 由看门狗降级优先级兜底。
+    pub background_suspend: bool,
     pub window_width: u32,
     pub window_height: u32,
 }
@@ -78,6 +82,7 @@ impl Default for LauncherConfig {
             download_choose_location: false,
             summon_shortcut: "Alt+Shift+D".into(),
             developer_mode: false,
+            background_suspend: false,
             window_width: 1100,
             window_height: 760,
         }

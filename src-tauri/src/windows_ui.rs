@@ -34,6 +34,11 @@ const SUSPEND_RUNNING: u64 = 2;
 #[cfg(target_os = "windows")]
 pub fn set_webview_suspended(app: &AppHandle, suspended: bool) {
     use crate::watchdog::append_log;
+    // 恢复调用在引擎本来就运行时是无意义操作（SetIsVisible/Resume 会
+    // 白跑一趟还刷日志），直接跳过。
+    if !suspended && WEBVIEW_SUSPENDED.load(Ordering::Relaxed) != SUSPEND_SUSPENDED {
+        return;
+    }
     WEBVIEW_SUSPENDED.store(
         if suspended { SUSPEND_SUSPENDED } else { SUSPEND_RUNNING },
         Ordering::Relaxed,
@@ -124,6 +129,18 @@ fn now_secs() -> u64 {
 pub fn sync_webview_suspension(app: &AppHandle) {
     #[cfg(target_os = "windows")]
     {
+        // 用户明确接受"后台断联换前台流畅"时才挂起；默认关闭。
+        if !crate::config::read_config(app)
+            .map(|c| c.background_suspend)
+            .unwrap_or(false)
+        {
+            // 配置关闭但引擎还挂在上一轮开启时留下的挂起态，恢复一次。
+            if WEBVIEW_SUSPENDED.load(Ordering::Relaxed) == SUSPEND_SUSPENDED {
+                set_webview_suspended(app, false);
+            }
+            LAST_ALL_HIDDEN.store(0, Ordering::Relaxed);
+            return;
+        }
         let mut desired_suspended = true;
         for (label, window) in app.webview_windows() {
             if !label.starts_with("control") {

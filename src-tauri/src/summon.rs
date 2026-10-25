@@ -41,10 +41,12 @@ fn toggle_control(app: &AppHandle) {
         let focused = window.is_focused().unwrap_or(false);
         if visible && focused {
             let _ = window.hide();
-            // 隐藏即挂起 WebView2，后台不再渲染（同步状态由看门狗兜底）。
+            // 是否挂起由 sync_webview_suspension 依据 background_suspend
+            // 配置决定（默认不挂起，页面保持在线）。
             sync_webview_suspension(app);
         } else {
-            // 挂起的引擎必须先恢复再显示，否则窗口亮出来是一帧静止画面。
+            // 若曾按配置挂起过，唤出必须先恢复，否则窗口亮出来是一帧
+            // 静止画面。未挂起时这组调用是无害空操作。
             set_webview_suspended(app, false);
             let _ = window.unminimize();
             let _ = window.show();

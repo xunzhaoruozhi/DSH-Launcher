@@ -14,7 +14,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use sysinfo::{Pid, ProcessesToUpdate, System};
+use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
 use tauri::{AppHandle, Manager};
 
 use crate::state::{current_status, AppState};
@@ -103,7 +103,16 @@ pub fn start(app: AppHandle) {
             // 窗口后，后台都不再渲染，不再挤占系统合成器。
             #[cfg(target_os = "windows")]
             sync_webview_suspension(&app);
-            system.refresh_processes(ProcessesToUpdate::All, true);
+            // 默认刷新不包含命令行；渲染进程识别依赖 --type=renderer，
+            // 必须显式要求刷新 cmd，否则 cmd() 恒为空、降级永远不触发。
+            system.refresh_processes_specifics(
+                ProcessesToUpdate::All,
+                true,
+                ProcessRefreshKind::nothing()
+                    .with_memory()
+                    .with_cpu()
+                    .with_cmd(UpdateKind::Always),
+            );
             // WebView2 broker 的父进程是启动器本体；顺着父子链收出整棵
             // msedgewebview2 树，node 等其他子进程天然排除。
             let brokers: Vec<Pid> = system
@@ -155,34 +164,27 @@ pub fn start(app: AppHandle) {
                 if *streak == HOT_STREAK {
                     report(&app, &system, pid, cpu, &tree, "持续高 CPU 开始");
                     last_report.insert(pid32, Instant::now());
-                    // 连续 20 秒高 CPU：把渲染进程降到 BELOW_NORMAL，让它
+                    // 连续 20 秒高 CPU 的渲染进程降到 BELOW_NORMAL，让它
                     // 只能吃剩余 CPU，壳子的输入、绘制与系统前台切换不再
-                    // 被挤死；冷却后自动恢复（见下方 retain）。渲染进程
-                    // 判断带日志，OpenProcess 失败也带日志，不再静默失败。
-                    if !demoted.contains(&pid32) {
-                        if hottest_is_renderer {
-                            if set_process_priority(pid32, true) {
-                                demoted.push(pid32);
-                                append_log(
-                                    &app,
-                                    &format!(
-                                        "已降级优先级: pid={pid32} cpu={cpu:.0}%/核 → BELOW_NORMAL"
-                                    ),
-                                );
-                            } else {
-                                append_log(
-                                    &app,
-                                    &format!("降级失败（OpenProcess/SetPriorityClass）: pid={pid32}"),
-                                );
-                            }
-                        } else {
-                            append_log(
-                                &app,
-                                &format!("持续高 CPU 非渲染进程，不降级: pid={pid32}"),
-                            );
-                        }
+                    // 被挤死；冷却后自动恢复（见下方 retain）。
+                    if !hottest_is_renderer {
+                        append_log(&app, &format!("持续高 CPU 非渲染进程，不降级: pid={pid32}"));
+                    } else if set_process_priority(pid32, true) {
+                        demoted.push(pid32);
+                        append_log(
+                            &app,
+                            &format!(
+                                "已降级优先级: pid={pid32} cpu={cpu:.0}%/核 → BELOW_NORMAL"
+                            ),
+                        );
+                    } else {
+                        append_log(
+                            &app,
+                            &format!("降级失败（OpenProcess/SetPriorityClass）: pid={pid32}"),
+                        );
                     }
-                } else if *streak > HOT_STREAK {
+                }
+                if *streak > HOT_STREAK {
                     let fresh = last_report
                         .get(&pid32)
                         .is_none_or(|t| t.elapsed() >= RELOG_EVERY);
