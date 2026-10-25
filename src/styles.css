@@ -30,7 +30,7 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 
 .shell { width: 100%; height: 100%; overflow: hidden; }
 /* 顶栏融入 dsh 页面配色：#151517 为实测 dsh Web 背景色，去掉分隔线后
-   与下方内容无缝衔接；按钮/标签的悬停、文字色通过局部变量覆盖自动转暗。 */
+   与下方内容无缝衔接；按钮的悬停、文字色通过局部变量覆盖自动转暗。 */
 .titlebar {
   height: 35px; display: flex; align-items: center; padding-left: 3px;
   /* 颜色由 dsh-theme 采样事件驱动（theme_sync.rs），默认暗色与 dsh 夜间主题一致。 */
@@ -43,6 +43,7 @@ button:disabled { cursor: not-allowed; opacity: .45; }
   --text-muted: var(--titlebar-muted, #9a9aa2);
 }
 .toolbar-left, .window-controls { height: 100%; display: flex; align-items: stretch; flex: none; }
+.window-controls { margin-left: auto; }
 /* 安全模式横幅：融入暗色顶栏的低调提示条，13px 辅助灰，不做大字。 */
 .safe-mode-banner {
   display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 14px;
@@ -78,44 +79,13 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 /* —— macOS：原生红绿灯在左，工具移到右侧（仅 body.os-macos，不影响 Windows） —— */
 /* 原生红黄绿按钮出现在左上，给标题栏左侧留 ~80px 避免内容压到按钮上。 */
 body.os-macos .titlebar { padding-left: 80px; padding-right: 8px; }
-/* 把工具组（管理/配置/插件/设置/新建）移到标签页右侧。 */
+/* 保留原生标题栏左侧空间，把工具组放在系统按钮右侧。 */
 body.os-macos .toolbar-left { order: 2; }
 /* 仅保留刷新按钮（“窗口控制”里的 min/max/close 由原生红绿灯接管，故隐藏）。 */
 body.os-macos .window-controls { order: 3; }
 body.os-macos #window-minimize,
 body.os-macos #window-maximize,
 body.os-macos #window-close { display: none; }
-
-/* —— 标签条：居中放在顶栏，空白处仍是窗口拖拽区 —— */
-.tab-zone { position: relative; flex: 1 1 0; min-width: 0; height: 100%; display: flex; align-items: center; justify-content: center; gap: 3px; padding: 0 8px; overflow: hidden; }
-.tab-strip { display: flex; align-items: center; gap: 3px; min-width: 0; max-width: 100%; overflow-x: auto; scrollbar-width: none; }
-.tab-strip::-webkit-scrollbar { display: none; }
-.tab { flex: 0 1 168px; min-width: 88px; display: flex; align-items: center; gap: 6px; height: 26px; padding: 0 5px 0 10px; border: 1px solid transparent; border-radius: 6px; color: var(--text-muted); font-size: 11.5px; user-select: none; cursor: default; }
-.tab:hover { background: color-mix(in srgb, var(--surface-hover) 62%, transparent); }
-.tab.active { background: var(--surface-hover); border-color: var(--border); color: var(--text); }
-.tab-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tab .tab-rename { height: 20px; flex: 1 1 auto; min-width: 40px; width: 100%; padding: 0 4px; border-radius: 4px; font-size: 11px; }
-.tab-close { flex: none; width: 18px; height: 18px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 4px; background: transparent; color: inherit; opacity: 0; }
-.tab:hover .tab-close, .tab.active .tab-close { opacity: .72; }
-.tab-close:hover { background: color-mix(in srgb, var(--text-muted) 24%, transparent); opacity: 1; }
-.tab-close svg { width: 11px; height: 11px; }
-/* 标签一多就逐级收缩（阈值与 main.ts 的 updateTabDensity 保持一致）：先压
-   宽度、藏起非活动标签的关闭钮，再压成小条；实在放不下时标签条横向滚动
-   （滚轮），活动标签自动滚入视野。 */
-.tab-strip.crowded .tab { min-width: 48px; padding: 0 4px 0 8px; }
-.tab-strip.crowded .tab:not(.active):not(:hover) .tab-close { display: none; }
-.tab-strip.dense .tab { min-width: 26px; padding: 0 5px; }
-.tab-strip.dense .tab:not(.active) .tab-close { display: none; }
-.tab-strip.dense .tab-title { text-overflow: clip; }
-.tab.dragging { opacity: .22; }
-.tab.tearing { opacity: .3; }
-.tab-drop-indicator { position: absolute; top: 5px; bottom: 5px; left: 0; width: 2px; border-radius: 2px; background: var(--accent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent), 0 0 8px color-mix(in srgb, var(--accent) 62%, transparent); pointer-events: none; z-index: 3; will-change: transform; }
-.tab-drop-indicator[hidden] { display: none; }
-.tab-ghost { position: fixed; left: 0; top: 0; z-index: 100; pointer-events: none; display: flex; align-items: center; gap: 7px; width: 168px; height: 28px; padding: 0 10px; border: 1px solid var(--accent); border-radius: 6px; background: var(--surface); color: var(--text); box-shadow: 0 10px 24px rgba(15, 19, 26, .32); will-change: transform; }
-.tab-ghost strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; }
-.tab-ghost-icon { color: var(--accent); font-size: 12px; line-height: 1; }
-.tab-ghost.outside-window { visibility: hidden; }
-body.tab-dragging, body.tab-dragging * { cursor: grabbing !important; }
 
 .workspace-view { position: relative; width: 100%; height: calc(100% - 35px); background: var(--surface); }
 .dsh-frame { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: var(--surface); color-scheme: light dark; }

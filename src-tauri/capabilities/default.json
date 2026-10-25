@@ -50,11 +50,6 @@
     "allow-check-plugin-updates",
     "allow-fetch-market",
     "allow-open-external",
-    "allow-new-launcher-window",
-    "allow-take-initial-tab",
-    "allow-show-tab-drag-preview",
-    "allow-move-tab-drag-preview",
-    "allow-hide-tab-drag-preview",
-    "allow-drop-tab"
+    "allow-new-launcher-window"
   ]
 }

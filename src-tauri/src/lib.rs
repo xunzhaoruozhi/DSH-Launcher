@@ -8,7 +8,7 @@
 // - updates     dsh 包更新与 Launcher 自身的版本检查
 // - dsh_files   DSH_HOME 下配置文件的读写
 // - download    WebView 下载请求处理
-// - windows_ui  多窗口与标签拖拽
+// - windows_ui  多窗口与开发者工具控制
 // - tray        托盘菜单
 // - util        零散通用工具
 mod config;
@@ -72,11 +72,6 @@ pub fn run() {
             market::fetch_market,
             util::open_external,
             windows_ui::new_launcher_window,
-            windows_ui::take_initial_tab,
-            windows_ui::show_tab_drag_preview,
-            windows_ui::move_tab_drag_preview,
-            windows_ui::hide_tab_drag_preview,
-            windows_ui::drop_tab
         ])
         .setup(|app| {
             #[cfg(target_os = "macos")]
@@ -98,13 +93,10 @@ pub fn run() {
             // 主窗口也通过 builder 创建，这样它和分离出来的窗口都能挂载下载回调。
             windows_ui::spawn_launcher_window_named(
                 &app.handle(),
-                app.state::<AppState>().inner(),
                 "control".into(),
                 None,
                 None,
-                None,
             )?;
-            windows_ui::setup_tab_drag_preview(app)?;
             // 注册全局唤出快捷键（按配置；后台线程执行，避免主线程自锁）。
             summon::apply(app.handle());
             // 顶栏颜色跟随 dsh 页面主题（日间/夜间切换时同步变色）。

@@ -1,4 +1,3 @@
-use serde::Serialize;
 use std::{
     sync::atomic::{AtomicU64, Ordering},
     thread,
@@ -17,14 +16,6 @@ use crate::{
     state::{AppState, Phase},
     util::open_external_url,
 };
-
-// 标题栏的逻辑高度（px），前端 .titlebar 与这里必须一致；拖拽落点命中
-// 其他窗口的这段区域时视为“拖入标签栏”。macOS 用原生 Overlay 标题栏、
-// 前端 .titlebar 保持 35px（与 Windows/Linux 一致，Overlay 由红绿灯所在
-// 系统栏提供，前端无需加高），各平台统一为 35px，否则 43~48px 的拖放会
-// 误判为“拖出成新窗口”。
-const TITLEBAR_LOGICAL_HEIGHT: f64 = 35.0;
-const TAB_DRAG_PREVIEW_LABEL: &str = "tab-drag-preview";
 
 // Links rendered inside the dsh iframe do not bubble to the launcher document.
 // Install the bridge in every frame so ordinary http(s) links reach the system
@@ -156,17 +147,10 @@ fn reveal_window_fallback(window: tauri::WebviewWindow) {
 
 pub fn spawn_launcher_window_named(
     app: &AppHandle,
-    state: &AppState,
     label: String,
-    initial_tab: Option<String>,
     position: Option<(f64, f64)>,
     size: Option<(f64, f64)>,
 ) -> Result<(), String> {
-    if let Some(title) = initial_tab {
-        if let Ok(mut pending) = state.pending_tabs.lock() {
-            pending.insert(label.clone(), title);
-        }
-    }
     // Use the app URL so Tauri resolves the dev server in development and
     // the bundled frontend in production. External URLs do not reliably get
     // the launcher initialization scripts and window APIs.
@@ -261,83 +245,18 @@ pub fn spawn_launcher_window_named(
 
 fn spawn_launcher_window(
     app: &AppHandle,
-    state: &AppState,
-    initial_tab: Option<String>,
     position: Option<(f64, f64)>,
     size: Option<(f64, f64)>,
 ) -> Result<(), String> {
-    spawn_launcher_window_named(app, state, next_window_label(), initial_tab, position, size)
-}
-
-pub fn setup_tab_drag_preview(app: &tauri::App) -> tauri::Result<()> {
-    let preview = WebviewWindowBuilder::new(
-        app,
-        TAB_DRAG_PREVIEW_LABEL,
-        WebviewUrl::App("drag-preview.html".into()),
-    )
-    .title("标签拖拽预览")
-    .inner_size(190.0, 30.0)
-    .resizable(false)
-    .decorations(false)
-    .always_on_top(true)
-    .skip_taskbar(true)
-    .focused(false)
-    .visible(false);
-    // 预览窗不需要毛玻璃，只要背景透明。macOS 上 `.transparent(true)` 依赖
-    // macos-private-api，而主窗口已经用它做振动模糊；这里保持仅非 macOS 启用，
-    // macOS 下退化为不透明小窗，不影响拖拽落点判定。
-    #[cfg(not(target_os = "macos"))]
-    let preview = preview.transparent(true);
-    let preview = preview.build()?;
-    preview.set_ignore_cursor_events(true)?;
-    Ok(())
-}
-
-fn position_tab_drag_preview(app: &AppHandle) -> Result<tauri::WebviewWindow, String> {
-    let preview = app
-        .get_webview_window(TAB_DRAG_PREVIEW_LABEL)
-        .ok_or("标签拖拽预览窗口不可用")?;
-    let cursor = app
-        .cursor_position()
-        .map_err(|error| format!("无法获取光标位置：{error}"))?;
-    preview
-        .set_position(tauri::PhysicalPosition::new(
-            (cursor.x + 14.0).round() as i32,
-            (cursor.y + 10.0).round() as i32,
-        ))
-        .map_err(|error| error.to_string())?;
-    Ok(preview)
-}
-
-#[tauri::command]
-pub fn show_tab_drag_preview(app: AppHandle, title: String) -> Result<(), String> {
-    let preview = position_tab_drag_preview(&app)?;
-    let title = serde_json::to_string(&title).map_err(|error| error.to_string())?;
-    preview
-        .eval(&format!("window.setTabTitle?.({title})"))
-        .map_err(|error| error.to_string())?;
-    preview.show().map_err(|error| error.to_string())
-}
-
-#[tauri::command]
-pub fn move_tab_drag_preview(app: AppHandle) -> Result<(), String> {
-    position_tab_drag_preview(&app).map(|_| ())
-}
-
-#[tauri::command]
-pub fn hide_tab_drag_preview(app: AppHandle) -> Result<(), String> {
-    if let Some(preview) = app.get_webview_window(TAB_DRAG_PREVIEW_LABEL) {
-        preview.hide().map_err(|error| error.to_string())?;
-    }
-    Ok(())
+    spawn_launcher_window_named(app, next_window_label(), position, size)
 }
 
 // 必须是 async：同步命令在主线程执行，而在主线程上同步创建 WebView 会在
 // Windows 上死锁（wry#583）——新窗口停在白屏，且事件循环被卡住，所有窗口的
 // 拖拽/最小化/关闭全部失效。
 #[tauri::command]
-pub async fn new_launcher_window(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
-    spawn_launcher_window(&app, state.inner(), None, None, None)
+pub async fn new_launcher_window(app: AppHandle) -> Result<(), String> {
+    spawn_launcher_window(&app, None, None)
 }
 
 #[tauri::command]
@@ -390,103 +309,6 @@ fn set_window_devtools_enabled(window: &tauri::WebviewWindow, enabled: bool) -> 
     receiver
         .recv_timeout(Duration::from_secs(5))
         .map_err(|error| format!("等待 WebView2 更新超时：{error}"))?
-}
-
-#[tauri::command]
-pub fn take_initial_tab(
-    window: tauri::WebviewWindow,
-    state: State<'_, AppState>,
-) -> Option<String> {
-    state
-        .pending_tabs
-        .lock()
-        .ok()
-        .and_then(|mut pending| pending.remove(window.label()))
-}
-
-#[derive(Debug, Clone, Copy, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum TabDropOutcome {
-    Adopted,
-    Detached,
-    None,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct AdoptedTab {
-    title: String,
-}
-
-// 标签被拖出窗口后松手：落点在其他 Launcher 窗口的标签栏上就让它收编，
-// 否则在光标处新建一个窗口带走这个标签。必须 async（见 new_launcher_window）。
-#[tauri::command]
-pub async fn drop_tab(
-    app: AppHandle,
-    window: tauri::WebviewWindow,
-    state: State<'_, AppState>,
-    title: String,
-    remaining: u32,
-) -> Result<TabDropOutcome, String> {
-    let cursor = app
-        .cursor_position()
-        .map_err(|error| format!("无法获取光标位置：{error}"))?;
-    for (label, target) in app.webview_windows() {
-        if label == window.label() || !label.starts_with("control") {
-            continue;
-        }
-        if target.is_minimized().unwrap_or(false) || !target.is_visible().unwrap_or(false) {
-            continue;
-        }
-        let (Ok(position), Ok(size)) = (target.outer_position(), target.outer_size()) else {
-            continue;
-        };
-        let scale = target.scale_factor().unwrap_or(1.0);
-        // 比标题栏多放宽几个像素，拖拽不必像素级精确。
-        let strip_bottom = position.y as f64 + (TITLEBAR_LOGICAL_HEIGHT + 8.0) * scale;
-        let inside_x =
-            cursor.x >= position.x as f64 && cursor.x <= position.x as f64 + size.width as f64;
-        let inside_y = cursor.y >= position.y as f64 && cursor.y <= strip_bottom;
-        if inside_x && inside_y {
-            let _ = target.set_focus();
-            app.emit_to(label.as_str(), "adopt-tab", AdoptedTab { title })
-                .map_err(|error| error.to_string())?;
-            // 被拆出的窗口只剩这一枚标签时，并入目标窗口后应立即销毁源窗口。
-            // 稍作延迟，让命令结果先回到前端；主窗口不能关闭，否则会触发托盘退出逻辑。
-            if window.label() != "control" && remaining <= 1 {
-                let source = window.clone();
-                thread::spawn(move || {
-                    thread::sleep(Duration::from_millis(80));
-                    let _ = source.close();
-                });
-            }
-            return Ok(TabDropOutcome::Adopted);
-        }
-    }
-    if remaining <= 1 {
-        // 窗口里唯一的标签拖到空白处没有意义（新窗口=原窗口），只支持并入其他窗口。
-        return Ok(TabDropOutcome::None);
-    }
-    let monitor_scale = app
-        .monitor_from_point(cursor.x, cursor.y)
-        .ok()
-        .flatten()
-        .map(|monitor| monitor.scale_factor())
-        .unwrap_or(1.0);
-    // 新窗口的标签栏正好落在光标下方一点，观感接近浏览器的拖出。
-    let position = (
-        cursor.x / monitor_scale - 120.0,
-        cursor.y / monitor_scale - 16.0,
-    );
-    // 拖出的窗口沿用来源窗口的尺寸。
-    let size = window.inner_size().ok().map(|inner| {
-        let scale = window.scale_factor().unwrap_or(1.0);
-        (
-            (inner.width as f64 / scale).max(1024.0),
-            (inner.height as f64 / scale).max(560.0),
-        )
-    });
-    spawn_launcher_window(&app, state.inner(), Some(title), Some(position), size)?;
-    Ok(TabDropOutcome::Detached)
 }
 
 #[tauri::command]

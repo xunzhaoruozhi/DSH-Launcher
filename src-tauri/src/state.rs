@@ -1,6 +1,6 @@
 use serde::Serialize;
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::VecDeque,
     io::{BufRead, BufReader, Read},
     process::Child,
     sync::{Arc, Mutex},
@@ -103,8 +103,6 @@ impl Default for RuntimeState {
 pub struct AppState {
     pub runtime: Arc<Mutex<RuntimeState>>,
     pub market: Arc<Mutex<Option<MarketCatalog>>>,
-    // 拖出标签新建窗口时，按窗口 label 暂存它要带走的标签标题。
-    pub pending_tabs: Arc<Mutex<HashMap<String, String>>>,
     // 串行化会改写安装目录/profile 的互斥操作（插件安装/卸载/更新、dsh 更新），
     // 防止并发的 npm/dsh 进程互相破坏同一份 package.json 或服务停启状态。
     pub ops: Arc<Mutex<()>>,
@@ -115,7 +113,6 @@ impl Default for AppState {
         Self {
             runtime: Arc::new(Mutex::new(RuntimeState::default())),
             market: Arc::new(Mutex::new(None)),
-            pending_tabs: Arc::new(Mutex::new(HashMap::new())),
             ops: Arc::new(Mutex::new(())),
         }
     }
