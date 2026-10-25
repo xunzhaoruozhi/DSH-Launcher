@@ -36,21 +36,31 @@ pub fn apply(app: &AppHandle) {
 
 /// 唤出/收起切换：主窗口已可见且拿到焦点就隐藏，否则显示并置顶聚焦。
 fn toggle_control(app: &AppHandle) {
+    crate::watchdog::append_log(app, "热键触发 toggle");
     if let Some(window) = app.get_webview_window("control") {
+        crate::watchdog::append_log(
+            app,
+            &format!(
+                "toggle 状态: visible={:?} focused={:?}",
+                window.is_visible(),
+                window.is_focused()
+            ),
+        );
         let visible = window.is_visible().unwrap_or(false);
         let focused = window.is_focused().unwrap_or(false);
         if visible && focused {
             let _ = window.hide();
-            // 是否挂起由 sync_webview_suspension 依据 background_suspend
-            // 配置决定（默认不挂起，页面保持在线）。
+            // 隐藏后停止 WebView2 出帧（页面 JS/网络照跑，保持在线），
+            // 由 sync_webview_suspension 统一对齐状态。
             sync_webview_suspension(app);
         } else {
-            // 若曾按配置挂起过，唤出必须先恢复，否则窗口亮出来是一帧
-            // 静止画面。未挂起时这组调用是无害空操作。
+            // 唤出必须先恢复出帧，否则窗口亮出来是一帧静止画面。
+            // 未停帧时状态守卫直接跳过，无副作用。
             set_webview_suspended(app, false);
             let _ = window.unminimize();
             let _ = window.show();
             let _ = window.set_focus();
+            crate::watchdog::append_log(app, "toggle 唤出完成");
         }
     }
 }

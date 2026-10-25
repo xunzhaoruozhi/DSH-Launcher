@@ -77,6 +77,12 @@ pub fn run() {
             windows_ui::new_launcher_window,
         ])
         .setup(|app| {
+            // 任意 panic 落到 watchdog 日志：此前进程消失无痕，无法排障。
+            let app_for_panic = app.handle().clone();
+            std::panic::set_hook(Box::new(move |info| {
+                eprintln!("panic: {info}");
+                crate::watchdog::append_log(&app_for_panic, &format!("panic: {info}"));
+            }));
             #[cfg(target_os = "macos")]
             exec::adopt_login_shell_path();
             tray::setup_tray(app)?;

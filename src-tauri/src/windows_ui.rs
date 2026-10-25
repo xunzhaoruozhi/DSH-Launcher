@@ -17,87 +17,46 @@ use crate::{
     util::open_external_url,
 };
 
-// —— WebView2 引擎挂起（Windows）——
+// —— WebView2 后台渲染开关（Windows）——
 // dsh iframe 与壳子页面共用一个渲染进程；窗口最小化/隐藏到托盘后页面仍在
-// 后台渲染，烧 CPU/GPU 挤占系统合成器，表现为本窗口还原不了、其他程序
-// 切不到前台。WebView2 的 TrySuspend/Resume 在不可见时挂起整个引擎、
-// 唤出时立即恢复，从根上掐掉后台渲染。
+// 后台出帧，烧 CPU/GPU 挤占系统合成器，表现为本窗口还原不了、其他程序
+// 切不到前台。控制器的 IsVisible 置 false 后 WebView2 停止出帧（渲染与
+// GPU 全停），但页面 JS、定时器、网络、WebSocket 全部照常运行——页面
+// 保持在线，不会触发断线重连。TrySuspend 会连 JS/网络一起冻结（页面
+// 掉线），因此弃用；wry 的窗口管理器只在 hide/show 时同步控制器可见性，
+// 最小化不经过它，所以这里统一自己维护。
 #[cfg(target_os = "windows")]
 static WEBVIEW_SUSPENDED: AtomicU64 = AtomicU64::new(0);
 
-// 挂起状态标记：0=未知 1=已挂起 2=运行中。
+// 渲染开关状态：0=未知 1=停止出帧 2=正常出帧。
 #[cfg(target_os = "windows")]
 const SUSPEND_SUSPENDED: u64 = 1;
 #[cfg(target_os = "windows")]
 const SUSPEND_RUNNING: u64 = 2;
 
+/// 强制设置 WebView2 是否出帧。窗口 HWND 的显隐不受影响；suspended=true
+/// 只是让页面停止渲染（JS/网络照跑），false 恢复正常渲染。
 #[cfg(target_os = "windows")]
 pub fn set_webview_suspended(app: &AppHandle, suspended: bool) {
     use crate::watchdog::append_log;
-    // 恢复调用在引擎本来就运行时是无意义操作（SetIsVisible/Resume 会
-    // 白跑一趟还刷日志），直接跳过。
-    if !suspended && WEBVIEW_SUSPENDED.load(Ordering::Relaxed) != SUSPEND_SUSPENDED {
+    let desired = if suspended { SUSPEND_SUSPENDED } else { SUSPEND_RUNNING };
+    if WEBVIEW_SUSPENDED.swap(desired, Ordering::Relaxed) == desired {
         return;
     }
-    WEBVIEW_SUSPENDED.store(
-        if suspended { SUSPEND_SUSPENDED } else { SUSPEND_RUNNING },
-        Ordering::Relaxed,
+    append_log(
+        app,
+        &if suspended {
+            "渲染开关: 停止出帧（页面在线）"
+        } else {
+            "渲染开关: 恢复出帧"
+        },
     );
-    if !suspended {
-        LAST_ALL_HIDDEN.store(0, Ordering::Relaxed);
-    }
     for (label, window) in app.webview_windows() {
         if !label.starts_with("control") {
             continue;
         }
-        let result_log = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
-        let results = result_log.clone();
         let _ = window.with_webview(move |webview| unsafe {
-            let Ok(core) = webview.controller().CoreWebView2() else {
-                results.lock().unwrap().push(format!("{label}: 拿不到 CoreWebView2"));
-                return;
-            };
-            use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2_3;
-            use windows::core::Interface as _;
-            let Ok(web3) = core.cast::<ICoreWebView2_3>() else {
-                results
-                    .lock().unwrap()
-                    .push(format!("{label}: 控制器不支持 ICoreWebView2_3"));
-                return;
-            };
-            if suspended {
-                // TrySuspend 的前置条件：控制器 IsVisible 必须先置 false
-                //（窗口最小化/隐藏不会自动改这个标志），否则请求被拒绝。
-                let _ = webview.controller().SetIsVisible(false.into());
-                let cb_results = results.clone();
-                let cb_label = label.clone();
-                let handler = webview2_com::TrySuspendCompletedHandler::create(Box::new(
-                    move |_error_code, ok| {
-                        cb_results
-                            .lock().unwrap()
-                            .push(format!("{cb_label}: TrySuspend 完成 ok={ok}"));
-                        Ok(())
-                    },
-                ));
-                match web3.TrySuspend(&handler) {
-                    Ok(()) => results.lock().unwrap().push(format!("{label}: TrySuspend 已提交")),
-                    Err(error) => results
-                        .lock().unwrap()
-                        .push(format!("{label}: TrySuspend 提交失败: {error}")),
-                }
-            } else {
-                let _ = webview.controller().SetIsVisible(true.into());
-                let _ = web3.Resume();
-                results.lock().unwrap().push(format!("{label}: Resume 已提交"));
-            }
-        });
-        // with_webview 的闭包在 UI 线程排队执行；给它一点时间后把结果落日志。
-        let app_for_log = app.clone();
-        thread::spawn(move || {
-            thread::sleep(Duration::from_millis(2500));
-            for line in result_log.lock().unwrap().iter() {
-                append_log(&app_for_log, line);
-            }
+            let _ = webview.controller().SetIsVisible((!suspended).into());
         });
     }
 }
@@ -105,43 +64,14 @@ pub fn set_webview_suspended(app: &AppHandle, suspended: bool) {
 #[cfg(not(target_os = "windows"))]
 pub fn set_webview_suspended(_app: &AppHandle, _suspended: bool) {}
 
-/// 按当前窗口可见性对齐挂起状态：任一主窗口可见且未最小化 → 运行；
-/// 全部不可见或最小化 → 挂起。挂起带 30 秒宽限期：快速隐藏/唤出（切
-/// 前台、临时看一眼）不动引擎，dsh 页面的 WebSocket 心跳不中断，避免
-/// 每次唤出都触发服务端断线重连；只有持续隐藏超过宽限期才挂起省 CPU。
-/// 状态没变化就不动 WebView2。看门狗周期调它兜底（JS 隐藏、托盘关闭
-/// 等路径都能覆盖）；唤出路径直接强制恢复。
-#[cfg(target_os = "windows")]
-static LAST_ALL_HIDDEN: AtomicU64 = AtomicU64::new(0);
-
-/// 挂起宽限期（秒）：隐藏时长超过它才真正挂起引擎。
-#[cfg(target_os = "windows")]
-const SUSPEND_GRACE_SECS: u64 = 30;
-
-#[cfg(target_os = "windows")]
-fn now_secs() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
-}
-
+/// 按当前窗口可见性对齐渲染开关：任一主窗口可见且未最小化 → 正常出帧；
+/// 全部不可见或最小化 → 停止出帧（页面保持在线）。状态没变化就不动
+/// WebView2。看门狗周期调它兜底（JS 隐藏、托盘关闭、最小化等路径都能
+/// 覆盖）；唤出路径也会立即对齐，还原窗口不用等周期。
 pub fn sync_webview_suspension(app: &AppHandle) {
     #[cfg(target_os = "windows")]
     {
-        // 用户明确接受"后台断联换前台流畅"时才挂起；默认关闭。
-        if !crate::config::read_config(app)
-            .map(|c| c.background_suspend)
-            .unwrap_or(false)
-        {
-            // 配置关闭但引擎还挂在上一轮开启时留下的挂起态，恢复一次。
-            if WEBVIEW_SUSPENDED.load(Ordering::Relaxed) == SUSPEND_SUSPENDED {
-                set_webview_suspended(app, false);
-            }
-            LAST_ALL_HIDDEN.store(0, Ordering::Relaxed);
-            return;
-        }
-        let mut desired_suspended = true;
+        let mut all_hidden = true;
         for (label, window) in app.webview_windows() {
             if !label.starts_with("control") {
                 continue;
@@ -149,41 +79,15 @@ pub fn sync_webview_suspension(app: &AppHandle) {
             let visible = window.is_visible().unwrap_or(false);
             let minimized = window.is_minimized().unwrap_or(false);
             if visible && !minimized {
-                desired_suspended = false;
+                all_hidden = false;
                 break;
             }
         }
-        let desired_state = if desired_suspended {
-            SUSPEND_SUSPENDED
-        } else {
-            SUSPEND_RUNNING
-        };
-        if desired_state == SUSPEND_RUNNING {
-            // 唤出瞬间清掉宽限计时；强制恢复必须立即执行（否则窗口亮
-            // 出来是一帧静止画面）。
-            LAST_ALL_HIDDEN.store(0, Ordering::Relaxed);
-            if WEBVIEW_SUSPENDED.load(Ordering::Relaxed) != desired_state {
-                set_webview_suspended(app, false);
-            }
-            return;
-        }
-        // 进入隐藏：从第一秒开始计时，宽限期内保持运行。
-        let hidden_since = LAST_ALL_HIDDEN.load(Ordering::Relaxed);
-        if hidden_since == 0 {
-            LAST_ALL_HIDDEN.store(now_secs(), Ordering::Relaxed);
-            return;
-        }
-        if now_secs() - hidden_since < SUSPEND_GRACE_SECS {
-            return;
-        }
-        if WEBVIEW_SUSPENDED.load(Ordering::Relaxed) != desired_state {
-            set_webview_suspended(app, true);
-        }
+        set_webview_suspended(app, all_hidden);
     }
     #[cfg(not(target_os = "windows"))]
     let _ = app;
 }
-
 // Links rendered inside the dsh iframe do not bubble to the launcher document.
 // Install the bridge in every frame so ordinary http(s) links reach the system
 // browser instead of navigating the embedded WebUI.

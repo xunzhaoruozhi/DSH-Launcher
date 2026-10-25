@@ -105,15 +105,16 @@ npm run tauri build
 
 ## WebView 看门狗（卡死排查）
 
-## WebView 挂起（可选，默认关闭）
+## 后台渲染开关（页面在线、后台零渲染）
 
-默认不挂起：窗口藏到后台后 dsh 页面继续在线（WebSocket 不断、唤出即用）。
-后台高 CPU 由看门狗自动降级渲染进程优先级兜底（见下文）。
+窗口最小化或藏到托盘后，启动器把 WebView2 控制器的 IsVisible 置为 false：
+渲染与 GPU 出帧全停（不再烧 CPU/GPU 挤占系统合成器，不会拖累其他窗口
+切前台），但页面 JS、定时器、WebSocket 全部照常运行——页面保持在线，
+唤出窗口立即恢复出帧，不会断线重连。
 
-如果接受"后台断联换前台绝对流畅"，可以在配置文件（`%APPDATA%\ai.deepseek.dsh-launcher\config.json`）
-加 `"background_suspend": true`：窗口全部隐藏/最小化超过 30 秒后调用
-WebView2 的 TrySuspend 挂起引擎，dsh 页面停止后台渲染；唤出窗口立即恢复，
-页面会自动重连补拉（挂起期间 WebSocket 会断，这是挂起的固有代价）。
+对比：TrySuspend 会连 JS/网络一起冻结（页面掉线、唤出后重连），因此弃用；
+IsVisible 开关只停渲染不断连接，是"后台不渲染但页面在线"的正确实现。
+后台高 CPU 时看门狗还会自动降级渲染进程优先级兜底（见下文）。
 
 ## 看门狗详情
 
