@@ -115,6 +115,17 @@ pub fn open_external_url(url: &str) -> Result<(), String> {
     if !url.starts_with("https://") && !url.starts_with("http://") {
         return Err("只允许打开 http(s) 链接".into());
     }
+    // 统一出口防御：本机地址一律不外抛。启动器自己的静态页面端口每次
+    // 重启都会变，开发端口也会停——丢给外部浏览器的 localhost 标签页
+    // 过后就是「拒绝连接」的僵尸页。调用方各自还有一层守卫，这里兜底。
+    if let Ok(parsed) = url.parse::<tauri::Url>() {
+        if matches!(
+            parsed.host_str(),
+            Some("localhost") | Some("127.0.0.1") | Some("[::1]")
+        ) {
+            return Err("本机地址不允许在外部浏览器打开".into());
+        }
+    }
     #[cfg(windows)]
     {
         // explorer.exe 对 URL 的处理依赖当前 Shell 关联，某些链接会被当成
