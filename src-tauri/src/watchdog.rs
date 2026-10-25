@@ -68,6 +68,42 @@ pub(crate) fn append_log(app: &AppHandle, line: &str) {
     }
 }
 
+/// 给启动器自己写一份 MiniDump。看门狗线程调用它抓「此刻」的全进程快照，
+/// 主线程哪怕死锁在 WebView2 里也会被原样写进文件，事后用调试器打开
+/// 就能看到它停在哪个调用上。写不进去（权限/磁盘）只记日志，绝不影响运行。
+#[cfg(target_os = "windows")]
+fn dump_main_thread(path: &std::path::Path) -> bool {
+    use windows_sys::Win32::System::Diagnostics::Debug::{
+        MiniDumpWithIndirectlyReferencedMemory, MiniDumpWriteDump,
+    };
+    use windows_sys::Win32::System::Threading::GetCurrentProcess;
+
+    let file = match std::fs::File::create(path) {
+        Ok(file) => file,
+        Err(_) => return false,
+    };
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::AsRawHandle;
+        unsafe {
+            MiniDumpWriteDump(
+                GetCurrentProcess(),
+                std::process::id(),
+                file.as_raw_handle(),
+                MiniDumpWithIndirectlyReferencedMemory,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+            != 0
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
 /// 本地时间（UTC+8）的紧凑时间戳；chrono 不在依赖树里，手写转换。
 fn timestamp() -> String {
     let secs = std::time::SystemTime::now()
@@ -110,6 +146,8 @@ pub fn start(app: AppHandle) {
         let mut demoted: Vec<u32> = Vec::new();
         append_log(&app, &format!("watchdog 启动，launcher pid={}", me));
         let mut last_hang_log: Option<Instant> = None;
+        let mut hang_started: Option<Instant> = None;
+        let mut dumped: bool = false;
         loop {
             thread::sleep(POLL);
             // Windows：把渲染开关对齐任务投递到主线程执行。绝不能在后台
@@ -128,11 +166,49 @@ pub fn start(app: AppHandle) {
                 let last = MAIN_THREAD_HEARTBEAT.load(AtomicOrdering::Relaxed);
                 let now = now_secs();
                 if last > 0
-                    && now - last > 30
+                    && now - last > 15
                     && last_hang_log.is_none_or(|t| t.elapsed() >= Duration::from_secs(60))
                 {
                     append_log(&app, &format!("主线程疑似卡死：心跳已 {} 秒未推进", now - last));
                     last_hang_log = Some(Instant::now());
+                    hang_started.get_or_insert(Instant::now());
+                    // 第一次发现就抓一份主线程的调用栈转储：MiniDump 写文件
+                    // 不需要目标线程配合，主线程卡死时也能抓到，事后用
+                    // WinDbx/cdb 看它到底停在哪个调用上。
+                    if !dumped {
+                        dumped = true;
+                        let dump_path = log_path(&app)
+                            .map(|p| p.with_file_name("main-thread-hang.dmp"));
+                        match dump_path {
+                            Some(path) => {
+                                let written = dump_main_thread(&path);
+                                append_log(
+                                    &app,
+                                    &format!(
+                                        "主线程卡死转储{}：{}",
+                                        if written { "已写入" } else { "失败" },
+                                        path.display()
+                                    ),
+                                );
+                            }
+                            None => append_log(&app, "主线程卡死转储失败：日志目录不可用"),
+                        }
+                    }
+                } else if last > 0 && now - last <= 15 {
+                    hang_started = None;
+                    dumped = false;
+                }
+                // 持续卡死 90 秒自动重启：用户至少能立刻继续用，不用手动
+                // 杀进程。重启前的转储和日志已经落盘，事后仍可排查。
+                if let Some(started) = hang_started {
+                    if started.elapsed() >= Duration::from_secs(90) {
+                        append_log(&app, "主线程卡死超过 90 秒，自动重启启动器");
+                        let app_handle = app.clone();
+                        let _ = std::process::Command::new(std::env::current_exe()
+                            .unwrap_or_else(|_| "dsh-launcher.exe".into()))
+                            .spawn();
+                        app_handle.exit(0);
+                    }
                 }
             }
             // 默认刷新不包含命令行；渲染进程识别依赖 --type=renderer，

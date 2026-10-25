@@ -42,6 +42,16 @@ use state::AppState;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        // 单实例：此前桌面图标连点/看门狗自愈重启的窗口期会叠出第二个
+        // Launcher（端口探测、托盘、状态广播全部互相打架）。第二个实例
+        // 启动时只负责把已有实例的主窗口唤到前台，然后立刻退出。
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(window) = app.get_webview_window("control") {
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![

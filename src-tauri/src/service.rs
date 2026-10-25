@@ -105,6 +105,22 @@ fn wait_for_port_free(port: u16) -> bool {
     false
 }
 
+/// 带重试的存活探测：端口刚经历进程退出/重启时，旧连接的 TIME_WAIT 或
+/// 监听 socket 尚在内核里交接，一次 TCP/HTTP 探测可能恰好失败，把活着的
+/// 外部 Web 服务误判成「占用者不可用」。安全模式退出（停安全实例 → 立刻
+/// 启动正式实例）正好踩在这个窗口上，因此多试几拍再下结论。
+fn http_service_alive_retry(port: u16) -> bool {
+    for attempt in 0..5 {
+        if http_service_alive(port) {
+            return true;
+        }
+        if attempt < 4 {
+            thread::sleep(Duration::from_millis(300));
+        }
+    }
+    false
+}
+
 /// 端口上 Web 服务的根路径状态码；连不上或不是 HTTP 时返回 None。
 ///
 /// 401 是 dsh 自 0.1.2 起加的浏览器认证：服务本身活着，但要求先用启动时
@@ -340,7 +356,7 @@ fn start_process_with(
         Err(_) => false,
     };
     if !port_free {
-        if http_service_alive(config.port) {
+        if http_service_alive_retry(config.port) {
             return attach_external(app, state, generation, config.port);
         }
         if !wait_for_port_free(config.port) {
