@@ -237,11 +237,17 @@ fn refresh_auth_required(app: &AppHandle, state: &AppState, generation: u64, por
         return;
     }
 
+    // A 401 is enough to show the authentication prompt. Cookie inspection is
+    // only used to suppress it when this WebView is already authenticated; a
+    // failed or stalled WebView2 callback must not leave the user with no way
+    // to enter the external dsh token URL.
+    update_auth_required(app, state, generation, true);
+
     let callback_app = app.clone();
     let callback_state = state.clone();
     query_auth_cookie_async(app.clone(), port, move |has_cookie| {
         let Some(has_cookie) = has_cookie else {
-            // 查询失败时维持现状；外部服务每 9 秒会重新检查。
+            // Keep the prompt visible on query failure; external services retry.
             return;
         };
         update_auth_required(&callback_app, &callback_state, generation, !has_cookie);
