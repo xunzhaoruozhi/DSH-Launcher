@@ -457,7 +457,8 @@ pub fn spawn_launcher_window_named(
         builder = builder.additional_browser_args(
             format!(
                 "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection \
-                 --enable-features=SitePerProcess --isolate-origins={dsh_origins}"
+                 --enable-features=SitePerProcess --site-per-process \
+                 --isolate-origins={dsh_origins}"
             )
             .as_str(),
         );
