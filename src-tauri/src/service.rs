@@ -154,9 +154,7 @@ fn attach_external(
     // 外部启动的 dsh 不会把带令牌的那行输出交给我们。要不要请用户动手，取决于
     // 两件事同时成立：服务端要认证，且这个 WebView 手里确实没有它的 Cookie
     // （之前认过的 Cookie 默认能用 30 天，那种情况直接进，不该弹提示）。
-    // 查不了（None）时先不打扰：外部服务每 9 秒会复查一次。
-    let auth_required =
-        http_root_status(port) == Some(401) && has_auth_cookie(&app, port) == Some(false);
+    // Cookie 通过 WebView2 异步查询，避免在 UI 线程嵌套泵消息。
     {
         let mut runtime = state.runtime.lock().map_err(|_| "启动器状态锁已损坏")?;
         if runtime.generation != generation {
@@ -168,22 +166,16 @@ fn attach_external(
         runtime.external = true;
         runtime.pid = None;
         runtime.web_url = None;
-        runtime.auth_required = auth_required;
-        runtime.auth_satisfied = !auth_required;
-        runtime.message = if auth_required {
-            format!(
-                "已连接到端口 {port} 上的 dsh：它的 Web 界面需要认证，粘贴 dsh 启动时打印的那行带 token 的地址即可（一次认证默认管 30 天）"
-            )
-        } else {
-            format!("已连接到端口 {port} 上已在运行的 dsh 服务（外部启动，Launcher 不会停止它）")
-        };
-        runtime.logs.push_back(if auth_required {
-            format!("[launcher] 端口 {port} 上的 dsh 要求浏览器认证，需要带 token 的地址才能进入")
-        } else {
-            "[launcher] 检测到端口已有 Web 服务在运行，直接沿用外部 dsh".into()
-        });
+        runtime.auth_required = false;
+        runtime.auth_satisfied = false;
+        runtime.message =
+            format!("已连接到端口 {port} 上已在运行的 dsh 服务（外部启动，Launcher 不会停止它）");
+        runtime
+            .logs
+            .push_back("[launcher] 检测到端口已有 Web 服务在运行，直接沿用外部 dsh".into());
     }
     emit_status(&app, &state);
+    refresh_auth_required(&app, &state, generation, port);
     let monitor_state = state.clone();
     thread::spawn(move || monitor_external(app, monitor_state, generation, port));
     current_status(state)
@@ -234,16 +226,29 @@ fn monitor_external(app: AppHandle, state: AppState, generation: u64, port: u16)
 ///
 /// 只看服务端状态码是不够的：启动器后台的探测请求不带 WebView 的 Cookie，
 /// 只要 dsh 开了认证，它看到的永远是 401，提示条就永远挂着——即使页面早就
-/// 正常打开了。真正的凭证在 WebView 的 Cookie 里，所以这里先问 WebView 有没有
-/// 这个端口的认证 Cookie，有就当已认证，只有「服务端要认证 + WebView 没凭证」
-/// 才需要用户动手。
+/// 正常打开了。真正的凭证在 WebView 的 Cookie 里；只在服务端确实返回 401 时
+/// 异步查询 WebView2 Cookie，避免走 Wry 的同步消息泵。
 fn refresh_auth_required(app: &AppHandle, state: &AppState, generation: u64, port: u16) {
-    // Cookie 状态查不了时维持现状：monitor_external 每 9 秒会再来一次，
-    // 别在未知状态下翻动提示。
-    let Some(has_cookie) = has_auth_cookie(app, port) else {
+    let Some(status) = http_root_status(port) else {
         return;
     };
-    let required = http_root_status(port) == Some(401) && !has_cookie;
+    if status != 401 {
+        update_auth_required(app, state, generation, false);
+        return;
+    }
+
+    let callback_app = app.clone();
+    let callback_state = state.clone();
+    query_auth_cookie_async(app.clone(), port, move |has_cookie| {
+        let Some(has_cookie) = has_cookie else {
+            // 查询失败时维持现状；外部服务每 9 秒会重新检查。
+            return;
+        };
+        update_auth_required(&callback_app, &callback_state, generation, !has_cookie);
+    });
+}
+
+fn update_auth_required(app: &AppHandle, state: &AppState, generation: u64, required: bool) {
     let mut changed = false;
     if let Ok(mut runtime) = state.runtime.lock() {
         if runtime.generation != generation {
@@ -253,9 +258,10 @@ fn refresh_auth_required(app: &AppHandle, state: &AppState, generation: u64, por
             runtime.auth_required = required;
             changed = true;
         }
-        // Cookie 在手就意味着这个 WebView 已经认过，别再提示。
-        if !required && !runtime.auth_satisfied {
-            runtime.auth_satisfied = true;
+        // Cookie 在手就意味着这个 WebView 已经认过；认证失效后也要重新显示提示。
+        let auth_satisfied = !required;
+        if runtime.auth_satisfied != auth_satisfied {
+            runtime.auth_satisfied = auth_satisfied;
             changed = true;
         }
     }
@@ -264,23 +270,32 @@ fn refresh_auth_required(app: &AppHandle, state: &AppState, generation: u64, por
     }
 }
 
+fn query_auth_cookie_async(
+    app: AppHandle,
+    port: u16,
+    callback: impl FnOnce(Option<bool>) + Send + 'static,
+) {
+    #[cfg(target_os = "windows")]
+    crate::windows_ui::query_auth_cookie_async(&app, port, callback);
+
+    #[cfg(not(target_os = "windows"))]
+    thread::spawn(move || callback(has_auth_cookie(&app, port)));
+}
+
 /// WebView 里是否已经有这个端口的 dsh 认证 Cookie。
 ///
 /// dsh 的 Cookie 名字是 `dsh-auth-<把 host:port 哈希过的串>`，名字里认不出端口，
 /// 所以按 URL 查。前端 frameUrl 会把 iframe 地址的 host 换成宿主页面的 host，
 /// 生产构建宿主在 http://localhost:<port> 上，所以 iframe 和 Cookie 都落在
 /// localhost；开发构建宿主也是 localhost。旧版本曾固定 127.0.0.1，生产环境
-/// 下永远查不到 Cookie，把已认证会话误判成“需要认证”。
-/// 返回 None 表示这一刻查不了（底层 panic 已被兜住），调用方应维持现状等复查。
+/// 下永远查不到 Cookie，把已认证会话误判成“需要认证”。Windows 使用上面的
+/// WebView2 原生异步 API；此同步实现只供其他平台的后台线程使用。
+#[cfg(not(target_os = "windows"))]
 fn has_auth_cookie(app: &AppHandle, port: u16) -> Option<bool> {
     let urls: Vec<tauri::Url> = ["localhost", "127.0.0.1"]
         .iter()
         .filter_map(|host| format!("http://{host}:{port}/").parse::<tauri::Url>().ok())
         .collect();
-    // tauri-runtime-wry 的 cookies_for_url 在事件循环没应答时不是返回 Err 而是
-    // 直接 panic（lib.rs 里的 rx.recv().unwrap()）。启动早期或窗口半死时查
-    // cookie 会踩中，把整个调用任务一起带走——界面卡在“正在启动”就是它。
-    // catch_unwind 兜住：查不了返回 None，等下一轮复查，别乱下结论。
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         app.webview_windows().values().any(|window| {
             urls.iter().any(|url| {

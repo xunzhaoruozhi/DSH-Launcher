@@ -39,7 +39,11 @@ const SUSPEND_RUNNING: u64 = 2;
 #[cfg(target_os = "windows")]
 pub fn set_webview_suspended(app: &AppHandle, suspended: bool) {
     use crate::watchdog::append_log;
-    let desired = if suspended { SUSPEND_SUSPENDED } else { SUSPEND_RUNNING };
+    let desired = if suspended {
+        SUSPEND_SUSPENDED
+    } else {
+        SUSPEND_RUNNING
+    };
     if WEBVIEW_SUSPENDED.swap(desired, Ordering::Relaxed) == desired {
         return;
     }
@@ -67,6 +71,174 @@ pub fn set_webview_suspended(app: &AppHandle, suspended: bool) {
 #[cfg(not(target_os = "windows"))]
 pub fn set_webview_suspended(_app: &AppHandle, _suspended: bool) {}
 
+#[cfg(target_os = "windows")]
+type AuthCookieCallback = Box<dyn FnOnce(Option<bool>) + Send + 'static>;
+
+#[cfg(target_os = "windows")]
+struct AuthCookieQueryBatch {
+    remaining: usize,
+    failed: bool,
+    callback: Option<AuthCookieCallback>,
+}
+
+/// 完成一项原生异步 Cookie 查询。每个请求有自己的 `completed` 标记，避免
+/// WebView2 回调和启动失败路径同时触发时重复结算。
+#[cfg(target_os = "windows")]
+fn finish_auth_cookie_request(
+    batch: &std::sync::Arc<std::sync::Mutex<AuthCookieQueryBatch>>,
+    completed: &std::sync::atomic::AtomicBool,
+    result: Option<bool>,
+) {
+    use std::sync::atomic::Ordering;
+
+    if completed.swap(true, Ordering::AcqRel) {
+        return;
+    }
+
+    let callback = {
+        let mut batch = batch
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if result == Some(true) {
+            batch.callback.take().map(|callback| (callback, Some(true)))
+        } else {
+            batch.failed |= result.is_none();
+            batch.remaining = batch.remaining.saturating_sub(1);
+            if batch.remaining == 0 {
+                let result = if batch.failed { None } else { Some(false) };
+                batch.callback.take().map(|callback| (callback, result))
+            } else {
+                None
+            }
+        }
+    };
+
+    if let Some((callback, result)) = callback {
+        callback(result);
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn cookie_list_has_auth_cookie(
+    cookies: Option<webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2CookieList>,
+) -> windows::core::Result<bool> {
+    use windows::{
+        core::{PCWSTR, PWSTR},
+        Win32::System::Com::CoTaskMemFree,
+    };
+
+    let Some(cookies) = cookies else {
+        return Ok(false);
+    };
+    let mut count = 0;
+    unsafe { cookies.Count(&mut count)? };
+    let prefix: Vec<u16> = "dsh-auth-".encode_utf16().collect();
+
+    for index in 0..count {
+        let cookie = unsafe { cookies.GetValueAtIndex(index)? };
+        let mut name = PWSTR::null();
+        unsafe { cookie.Name(&mut name)? };
+        if name.is_null() {
+            continue;
+        }
+
+        let matches = unsafe {
+            let length = PCWSTR::from_raw(name.0).len();
+            length >= prefix.len()
+                && std::slice::from_raw_parts(name.0, prefix.len()) == prefix.as_slice()
+        };
+        unsafe { CoTaskMemFree(Some(name.0.cast())) };
+        if matches {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
+}
+
+/// 异步读取 WebView2 的认证 Cookie。`cookies_for_url` 在 Wry 里会等待异步
+/// Cookie API 并嵌套泵 Windows 消息；输入法的 TSF 回调重入时，这会和窗口
+/// 状态查询交错。这里直接注册 WebView2 完成回调，不等待、不嵌套消息泵。
+#[cfg(target_os = "windows")]
+pub fn query_auth_cookie_async(
+    app: &AppHandle,
+    port: u16,
+    callback: impl FnOnce(Option<bool>) + Send + 'static,
+) {
+    use std::sync::{atomic::AtomicBool, Arc, Mutex};
+    use webview2_com::{
+        GetCookiesCompletedHandler, Microsoft::Web::WebView2::Win32::ICoreWebView2_2,
+    };
+    use windows::core::{Interface, HSTRING, PCWSTR};
+
+    let windows: Vec<_> = app
+        .webview_windows()
+        .into_iter()
+        .filter(|(label, _)| label.starts_with("control"))
+        .map(|(_, window)| window)
+        .collect();
+    let request_count = windows.len() * 2;
+    if request_count == 0 {
+        callback(None);
+        return;
+    }
+
+    let batch = Arc::new(Mutex::new(AuthCookieQueryBatch {
+        remaining: request_count,
+        failed: false,
+        callback: Some(Box::new(callback)),
+    }));
+
+    for window in windows {
+        for host in ["localhost", "127.0.0.1"] {
+            let url = format!("http://{host}:{port}/");
+            let request_batch = Arc::clone(&batch);
+            let schedule_batch = Arc::clone(&batch);
+            let request_completed = Arc::new(AtomicBool::new(false));
+            let callback_completed = Arc::clone(&request_completed);
+            let schedule_completed = Arc::clone(&request_completed);
+
+            let scheduled = window.with_webview(move |webview| {
+                let result = (|| -> windows::core::Result<()> {
+                    let core = unsafe {
+                        webview
+                            .controller()
+                            .CoreWebView2()?
+                            .cast::<ICoreWebView2_2>()?
+                    };
+                    let manager = unsafe { core.CookieManager()? };
+                    let uri = HSTRING::from(url);
+                    let callback_batch = Arc::clone(&request_batch);
+                    let handler =
+                        GetCookiesCompletedHandler::create(Box::new(move |status, cookies| {
+                            let result = status
+                                .and_then(|()| cookie_list_has_auth_cookie(cookies))
+                                .ok();
+                            finish_auth_cookie_request(
+                                &callback_batch,
+                                &callback_completed,
+                                result,
+                            );
+                            Ok(())
+                        }));
+                    unsafe {
+                        manager.GetCookies(PCWSTR::from_raw(uri.as_ptr()), &handler)?;
+                    }
+                    Ok(())
+                })();
+
+                if result.is_err() {
+                    finish_auth_cookie_request(&request_batch, &request_completed, None);
+                }
+            });
+
+            if scheduled.is_err() {
+                finish_auth_cookie_request(&schedule_batch, &schedule_completed, None);
+            }
+        }
+    }
+}
+
 /// 按当前窗口可见性对齐渲染开关：任一主窗口可见且未最小化 → 正常出帧；
 /// 全部不可见或最小化 → 停止出帧（页面保持在线）。状态没变化就不动
 /// WebView2。看门狗周期调它兜底（JS 隐藏、托盘关闭、最小化等路径都能
@@ -79,8 +251,18 @@ pub fn sync_webview_suspension(app: &AppHandle) {
             if !label.starts_with("control") {
                 continue;
             }
-            let visible = window.is_visible().unwrap_or(false);
-            let minimized = window.is_minimized().unwrap_or(false);
+            // Tauri 的 is_visible/is_minimized 会向事件循环发同步请求并等待。
+            // 从窗口事件或输入法 TSF 回调重入时可能卡在这个等待里。HWND
+            // 查询是本地 Win32 状态读取，不会向 WebView/Tauri 消息队列等待。
+            let Ok(hwnd) = window.hwnd() else {
+                all_hidden = false;
+                break;
+            };
+            let visible = unsafe {
+                windows_sys::Win32::UI::WindowsAndMessaging::IsWindowVisible(hwnd.0) != 0
+            };
+            let minimized =
+                unsafe { windows_sys::Win32::UI::WindowsAndMessaging::IsIconic(hwnd.0) != 0 };
             if visible && !minimized {
                 all_hidden = false;
                 break;
@@ -296,9 +478,15 @@ pub fn spawn_launcher_window_named(
             // 重启都会变，开发端口也会停——外抛出去的 Edge 标签页过后就
             // 变成「localhost 拒绝连接」的僵尸页。点击链接的桥接脚本已
             // 排除回环地址，这里补上新窗口路径的同样守卫。
-            let is_loopback = matches!(url.host_str(), Some("localhost") | Some("127.0.0.1") | Some("[::1]"));
+            let is_loopback = matches!(
+                url.host_str(),
+                Some("localhost") | Some("127.0.0.1") | Some("[::1]")
+            );
             if is_loopback {
-                crate::watchdog::append_log(&new_window_app, &format!("已拒绝外部打开本机地址: {url}"));
+                crate::watchdog::append_log(
+                    &new_window_app,
+                    &format!("已拒绝外部打开本机地址: {url}"),
+                );
                 return tauri::webview::NewWindowResponse::Deny;
             }
             if url.scheme() == "http" || url.scheme() == "https" {
