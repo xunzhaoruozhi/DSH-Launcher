@@ -1,9 +1,8 @@
 //! WebView2 子进程看门狗：窗口偶发假死时渲染进程会持续吃满一个核，
 //! 但冷静期抓不到现场。这里后台每 5 秒扫一遍本应用名下的 msedgewebview2
-//! 进程树，某个进程连续 20 秒 CPU 超过 0.6 核就把它降到 BELOW_NORMAL
-//! 优先级（dsh iframe 与壳子同站，WebView2 不支持 iframe 级进程隔离，
-//! 两者共用一个渲染进程，不加限制时壳子的输入与绘制会被一起挤死），
-//! 冷却后恢复 NORMAL；进程信息连同启动器状态同时追加到 watchdog 日志。
+//! 进程树，某个进程连续 20 秒 CPU 超过 0.6 核就写入证据；只有启动器不在
+//! 前台时才把渲染进程降到 BELOW_NORMAL。语音输入等正常交互也会产生 CPU
+//! 峰值，前台降级会反过来拖慢输入处理，因此前台只记录、不降级。
 
 use std::{
     collections::HashMap,
@@ -150,6 +149,7 @@ pub fn start(app: AppHandle) {
         let mut dumped: bool = false;
         loop {
             thread::sleep(POLL);
+            let launcher_is_foreground = launcher_is_foreground(me.as_u32());
             // Windows：把渲染开关对齐任务投递到主线程执行。绝不能在后台
             // 线程直接调 is_visible()——它向主线程发消息并无限期等待，
             // 主线程被 WebView2 同步调用拖住时，看门狗会一起被冻死，
@@ -291,10 +291,16 @@ pub fn start(app: AppHandle) {
                 if *streak == HOT_STREAK {
                     report(&app, &system, pid, cpu, &tree, "持续高 CPU 开始");
                     last_report.insert(pid32, Instant::now());
-                    // 连续 20 秒高 CPU 的渲染进程降到 BELOW_NORMAL，让它
-                    // 只能吃剩余 CPU，壳子的输入、绘制与系统前台切换不再
-                    // 被挤死；冷却后自动恢复（见下方 retain）。
-                    if !hottest_is_renderer {
+                    // 语音输入等前台交互会正常拉高渲染进程 CPU。此时降级
+                    // 会把尚未提交的文字拖慢好几秒，所以仅后台允许降级。
+                    if launcher_is_foreground {
+                        append_log(
+                            &app,
+                            &format!(
+                                "持续高 CPU 时启动器在前台，不降级: pid={pid32} cpu={cpu:.0}%/核"
+                            ),
+                        );
+                    } else if !hottest_is_renderer {
                         append_log(&app, &format!("持续高 CPU 非渲染进程，不降级: pid={pid32}"));
                     } else if set_process_priority(pid32, true) {
                         demoted.push(pid32);
@@ -325,10 +331,20 @@ pub fn start(app: AppHandle) {
                 last_report.remove(&pid32);
             }
             demoted.retain(|&hot_pid| match system.process(Pid::from_u32(hot_pid)) {
-                Some(process) if process.cpu_usage() >= CPU_LIMIT => true,
+                Some(process) if !launcher_is_foreground && process.cpu_usage() >= CPU_LIMIT => true,
                 Some(_) => {
                     set_process_priority(hot_pid, false);
-                    append_log(&app, &format!("优先级已恢复: pid={hot_pid}"));
+                    append_log(
+                        &app,
+                        &format!(
+                            "优先级已恢复: pid={hot_pid}，{}",
+                            if launcher_is_foreground {
+                                "启动器已在前台"
+                            } else {
+                                "CPU 已回落"
+                            }
+                        ),
+                    );
                     false
                 }
                 None => {
@@ -433,5 +449,29 @@ fn set_process_priority(pid: u32, below_normal: bool) -> bool {
 
 #[cfg(not(windows))]
 fn set_process_priority(_pid: u32, _below_normal: bool) -> bool {
+    false
+}
+
+/// 前台窗口属于启动器进程时才允许跳过降级。这里直接查 Win32，避免从
+/// 看门狗线程调用 Tauri 的窗口状态接口而等待主线程消息循环。
+#[cfg(windows)]
+fn launcher_is_foreground(launcher_pid: u32) -> bool {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetForegroundWindow, GetWindowThreadProcessId,
+    };
+
+    unsafe {
+        let window = GetForegroundWindow();
+        if window.is_null() {
+            return false;
+        }
+        let mut pid = 0;
+        GetWindowThreadProcessId(window, &mut pid);
+        pid == launcher_pid
+    }
+}
+
+#[cfg(not(windows))]
+fn launcher_is_foreground(_launcher_pid: u32) -> bool {
     false
 }
