@@ -286,10 +286,9 @@ fn query_auth_cookie_async(
 ///
 /// dsh 的 Cookie 名字是 `dsh-auth-<把 host:port 哈希过的串>`，名字里认不出端口，
 /// 所以按 URL 查。前端 frameUrl 会把 iframe 地址的 host 换成宿主页面的 host，
-/// 生产构建宿主在 http://localhost:<port> 上，所以 iframe 和 Cookie 都落在
-/// localhost；开发构建宿主也是 localhost。旧版本曾固定 127.0.0.1，生产环境
-/// 下永远查不到 Cookie，把已认证会话误判成“需要认证”。Windows 使用上面的
-/// WebView2 原生异步 API；此同步实现只供其他平台的后台线程使用。
+/// 生产构建宿主现在固定为 http://127.0.0.1:<port>，iframe 和 Cookie 都落在
+/// IPv4 地址上；开发构建宿主仍是 localhost。Windows 使用上面的 WebView2
+/// 原生异步 API；此同步实现只供其他平台的后台线程使用。
 #[cfg(not(target_os = "windows"))]
 fn has_auth_cookie(app: &AppHandle, port: u16) -> Option<bool> {
     let urls: Vec<tauri::Url> = ["localhost", "127.0.0.1"]

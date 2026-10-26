@@ -366,15 +366,16 @@ const EXTERNAL_LINK_BRIDGE: &str = r#"
 
 /// 窗口要加载的页面地址。
 ///
-/// 生产构建走本机 HTTP（`http://localhost:<port>`）而不是 Tauri 内置协议：
-/// 内嵌的 dsh 页面与宿主同站，认证 Cookie 才不会被第三方 Cookie 策略丢掉。
-/// 开发构建沿用 dev server，它本身就在 localhost 上。
+/// 生产构建走本机 IPv4 HTTP（`http://127.0.0.1:<port>`）而不是 Tauri 内置
+/// 协议：内嵌的 dsh 页面与宿主同源，认证 Cookie 才不会被第三方 Cookie
+/// 策略丢掉。dsh 只监听 IPv4，固定使用 IPv4 也可避免 localhost 先解析到
+/// `[::1]` 时的连接失败。开发构建沿用 dev server 的 localhost。
 fn launcher_url(app: &AppHandle) -> Result<WebviewUrl, String> {
     if tauri::is_dev() {
         return Ok(WebviewUrl::App("index.html".into()));
     }
     match app.try_state::<crate::webserve::FrontendPort>() {
-        Some(port) => format!("http://localhost:{}/index.html", port.0)
+        Some(port) => format!("http://127.0.0.1:{}/index.html", port.0)
             .parse()
             .map(WebviewUrl::External)
             .map_err(|error| format!("前端地址无效：{error}")),
